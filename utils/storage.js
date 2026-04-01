@@ -68,3 +68,7 @@ export const getAllStorageKeys = async () => {
     return [];
   }
 };
+
+// Generic aliases used by feature screens
+export const saveData = saveToStorage;
+export const loadData = getFromStorage;
