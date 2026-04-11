@@ -5,7 +5,6 @@ import {
   FlatList,
   Platform,
   Pressable,
-  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
@@ -85,37 +84,50 @@ export default function TasksScreen() {
   function renderTask({ item }) {
     const pColor = priorityColor(item.priority);
     return (
-      <View style={styles.taskCard}>
-        <TouchableOpacity style={styles.checkbox} onPress={() => toggleDone(item.id)}>
-          {item.done && <View style={styles.checkboxTick} />}
+      <View className="flex-row items-center bg-white rounded-[10px] p-3 mb-2.5 shadow-sm">
+        <TouchableOpacity
+          className="w-[22px] h-[22px] rounded-[6px] border-2 border-indigo-500 mr-3 items-center justify-center"
+          onPress={() => toggleDone(item.id)}
+        >
+          {item.done && <View className="w-[11px] h-[11px] rounded-[3px] bg-indigo-500" />}
         </TouchableOpacity>
 
-        <View style={styles.taskBody}>
-          <Text style={[styles.taskTitle, item.done && styles.taskTitleDone]}>{item.title}</Text>
-          <Text style={styles.taskDate}>{formatDate(item.dueDate)}</Text>
+        <View className="flex-1">
+          <Text
+            className={`text-[15px] font-medium ${
+              item.done ? 'line-through text-slate-400' : 'text-slate-800'
+            }`}
+          >
+            {item.title}
+          </Text>
+          <Text className="text-xs text-slate-400 mt-0.5">{formatDate(item.dueDate)}</Text>
         </View>
 
-        <View style={[styles.priorityBadge, { backgroundColor: pColor + '22', borderColor: pColor }]}>
-          <Text style={[styles.priorityBadgeText, { color: pColor }]}>
+        {/* Priority badge — color is dynamic, so we keep borderColor/bg as inline style */}
+        <View
+          className="border rounded-[6px] px-[7px] py-[3px] mr-2"
+          style={{ backgroundColor: pColor + '22', borderColor: pColor }}
+        >
+          <Text className="text-[11px] font-semibold" style={{ color: pColor }}>
             {item.priority.charAt(0).toUpperCase() + item.priority.slice(1)}
           </Text>
         </View>
 
-        <TouchableOpacity style={styles.deleteBtn} onPress={() => confirmDelete(item.id)}>
-          <Text style={styles.deleteBtnText}>✕</Text>
+        <TouchableOpacity className="p-1" onPress={() => confirmDelete(item.id)}>
+          <Text className="text-sm text-slate-400">✕</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
   return (
-    <View style={styles.screen}>
+    <View className="flex-1 bg-slate-50">
       {/* Input card */}
-      <View style={styles.inputCard}>
-        <Text style={styles.heading}>Add Task</Text>
+      <View className="m-4 p-4 bg-white rounded-xl shadow">
+        <Text className="text-lg font-bold text-slate-800 mb-3">Add Task</Text>
 
         <TextInput
-          style={styles.textInput}
+          className="border border-slate-200 rounded-lg px-3 py-2.5 text-[15px] text-slate-800 mb-3"
           placeholder="Task title…"
           placeholderTextColor="#94a3b8"
           value={title}
@@ -123,22 +135,24 @@ export default function TasksScreen() {
           returnKeyType="done"
         />
 
-        {/* Priority selector */}
-        <View style={styles.priorityRow}>
+        {/* Priority selector — border/bg colors are dynamic */}
+        <View className="flex-row gap-2 mb-3">
           {PRIORITY_OPTIONS.map((opt) => {
             const selected = priority === opt.value;
             return (
               <Pressable
                 key={opt.value}
-                style={[
-                  styles.priorityBtn,
+                className="flex-1 py-2 rounded-lg border-[1.5px] items-center"
+                style={
                   selected
                     ? { backgroundColor: opt.color, borderColor: opt.color }
-                    : { borderColor: opt.color },
-                ]}
+                    : { borderColor: opt.color }
+                }
                 onPress={() => setPriority(opt.value)}
               >
-                <Text style={[styles.priorityBtnText, selected && { color: '#fff' }]}>
+                <Text
+                  className={`text-[13px] font-semibold ${selected ? 'text-white' : 'text-gray-700'}`}
+                >
                   {opt.label}
                 </Text>
               </Pressable>
@@ -147,8 +161,11 @@ export default function TasksScreen() {
         </View>
 
         {/* Due date */}
-        <TouchableOpacity style={styles.dateBtn} onPress={() => setShowPicker(true)}>
-          <Text style={styles.dateBtnText}>Due: {formatDate(dueDate.toISOString())}</Text>
+        <TouchableOpacity
+          className="border border-slate-200 rounded-lg px-3 py-2.5 mb-3"
+          onPress={() => setShowPicker(true)}
+        >
+          <Text className="text-sm text-slate-600">Due: {formatDate(dueDate.toISOString())}</Text>
         </TouchableOpacity>
 
         {showPicker && (
@@ -160,8 +177,8 @@ export default function TasksScreen() {
           />
         )}
 
-        <TouchableOpacity style={styles.addBtn} onPress={addTask}>
-          <Text style={styles.addBtnText}>Add Task</Text>
+        <TouchableOpacity className="bg-indigo-500 rounded-lg py-3 items-center" onPress={addTask}>
+          <Text className="text-white text-[15px] font-bold">Add Task</Text>
         </TouchableOpacity>
       </View>
 
@@ -170,157 +187,13 @@ export default function TasksScreen() {
         data={tasks}
         keyExtractor={(item) => item.id}
         renderItem={renderTask}
-        contentContainerStyle={styles.list}
-        ListEmptyComponent={<Text style={styles.emptyText}>No tasks yet. Add one above!</Text>}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}
+        ListEmptyComponent={
+          <Text className="text-center text-slate-400 mt-8 text-sm">
+            No tasks yet. Add one above!
+          </Text>
+        }
       />
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: '#f8fafc',
-  },
-  inputCard: {
-    margin: 16,
-    padding: 16,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-  },
-  heading: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1e293b',
-    marginBottom: 12,
-  },
-  textInput: {
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: '#1e293b',
-    marginBottom: 12,
-  },
-  priorityRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
-  },
-  priorityBtn: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1.5,
-    alignItems: 'center',
-  },
-  priorityBtnText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  dateBtn: {
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 12,
-  },
-  dateBtnText: {
-    fontSize: 14,
-    color: '#475569',
-  },
-  addBtn: {
-    backgroundColor: '#6366f1',
-    borderRadius: 8,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  addBtnText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  list: {
-    paddingHorizontal: 16,
-    paddingBottom: 32,
-  },
-  taskCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 10,
-    elevation: 1,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 3,
-  },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: '#6366f1',
-    marginRight: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkboxTick: {
-    width: 11,
-    height: 11,
-    borderRadius: 3,
-    backgroundColor: '#6366f1',
-  },
-  taskBody: {
-    flex: 1,
-  },
-  taskTitle: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#1e293b',
-  },
-  taskTitleDone: {
-    textDecorationLine: 'line-through',
-    color: '#94a3b8',
-  },
-  taskDate: {
-    fontSize: 12,
-    color: '#94a3b8',
-    marginTop: 2,
-  },
-  priorityBadge: {
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    marginRight: 8,
-  },
-  priorityBadgeText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  deleteBtn: {
-    padding: 4,
-  },
-  deleteBtnText: {
-    fontSize: 14,
-    color: '#94a3b8',
-  },
-  emptyText: {
-    textAlign: 'center',
-    color: '#94a3b8',
-    marginTop: 32,
-    fontSize: 14,
-  },
-});
