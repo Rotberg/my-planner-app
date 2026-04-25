@@ -1,0 +1,14 @@
+To do -
+
+    Shopping List -
+        Add Favorites to the Shopping List
+        Ability to import a list of items in.csv or .txt format, have it check to see if they are already on the shopping list if not then add them
+        Save Created date for shopping list with the ability to attach a delivery date on by the user
+
+    Task -
+        Add in recuring tasks
+        Add in time to task not just dates
+        Add in tags to tasks i.e daily regiment, dr appointment. And the ability to add/remove tags
+
+    Planner -
+        Change to monthly view rather then weekly

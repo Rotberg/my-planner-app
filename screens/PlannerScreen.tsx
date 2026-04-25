@@ -9,7 +9,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 import { cancelEventNotification, scheduleEventNotification } from '../utils/notifications';
 import { loadData, saveData } from '../utils/storage';
@@ -19,13 +19,13 @@ const STORAGE_KEY = 'planner_events';
 type PlannerEvent = {
   id: string;
   title: string;
-  date: string;          // YYYY-MM-DD
-  time: string;          // HH:MM (24h)
+  date: string;   // YYYY-MM-DD
+  time: string;   // HH:MM (24h)
   notes: string;
   notificationId?: string | null;
 };
 
-// ── Date helpers ────────────────────────────────────────────────────────────
+// ── Date helpers ─────────────────────────────────────────────────────────────
 
 function toYMD(date: Date): string {
   const y = date.getFullYear();
@@ -38,34 +38,6 @@ function toHHMM(date: Date): string {
   return date.toTimeString().slice(0, 5);
 }
 
-function getMondayOf(date: Date): Date {
-  const d = new Date(date);
-  const day = d.getDay(); // 0 = Sun
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-function addDays(date: Date, n: number): Date {
-  const d = new Date(date);
-  d.setDate(d.getDate() + n);
-  return d;
-}
-
-function formatMonthRange(monday: Date): string {
-  const sunday = addDays(monday, 6);
-  const opts: Intl.DateTimeFormatOptions = { month: 'long', year: 'numeric' };
-  if (monday.getMonth() === sunday.getMonth()) {
-    return monday.toLocaleDateString(undefined, opts);
-  }
-  return (
-    monday.toLocaleDateString(undefined, { month: 'short' }) +
-    ' / ' +
-    sunday.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })
-  );
-}
-
 function formatEventTime(time: string): string {
   const [h, m] = time.split(':').map(Number);
   const period = h >= 12 ? 'PM' : 'AM';
@@ -73,21 +45,41 @@ function formatEventTime(time: string): string {
   return `${hour}:${String(m).padStart(2, '0')} ${period}`;
 }
 
-const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
 
-// ── Component ───────────────────────────────────────────────────────────────
+const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** Returns 42 dates (6 weeks) starting from the Sunday of the week that contains the 1st of the month. */
+function buildMonthGrid(year: number, month: number): Date[] {
+  const firstOfMonth = new Date(year, month, 1);
+  const startDow = firstOfMonth.getDay(); // 0 = Sun
+  const gridStart = new Date(year, month, 1 - startDow);
+  return Array.from({ length: 42 }, (_, i) => {
+    const d = new Date(gridStart);
+    d.setDate(gridStart.getDate() + i);
+    return d;
+  });
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function PlannerScreen() {
   const today = new Date();
-  const [weekStart, setWeekStart] = useState<Date>(getMondayOf(today));
-  const [selectedDate, setSelectedDate] = useState<string>(toYMD(today));
+  const todayYMD = toYMD(today);
+
+  const [displayYear, setDisplayYear] = useState(today.getFullYear());
+  const [displayMonth, setDisplayMonth] = useState(today.getMonth());
+  const [selectedDate, setSelectedDate] = useState(todayYMD);
   const [events, setEvents] = useState<PlannerEvent[]>([]);
 
   // Modal state
   const [modalVisible, setModalVisible] = useState(false);
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
-  const [eventTime, setEventTime] = useState<Date>(new Date());
+  const [eventTime, setEventTime] = useState(new Date());
   const [showTimePicker, setShowTimePicker] = useState(false);
 
   useEffect(() => {
@@ -101,19 +93,27 @@ export default function PlannerScreen() {
     await saveData(STORAGE_KEY, updated);
   }
 
-  // ── Week navigation ──────────────────────────────────────────────────────
+  // ── Month navigation ────────────────────────────────────────────────────────
 
-  function prevWeek() {
-    setWeekStart((w) => addDays(w, -7));
+  function prevMonth() {
+    if (displayMonth === 0) {
+      setDisplayMonth(11);
+      setDisplayYear((y) => y - 1);
+    } else {
+      setDisplayMonth((m) => m - 1);
+    }
   }
 
-  function nextWeek() {
-    setWeekStart((w) => addDays(w, 7));
+  function nextMonth() {
+    if (displayMonth === 11) {
+      setDisplayMonth(0);
+      setDisplayYear((y) => y + 1);
+    } else {
+      setDisplayMonth((m) => m + 1);
+    }
   }
 
-  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
-
-  // ── Add event ────────────────────────────────────────────────────────────
+  // ── Add event ───────────────────────────────────────────────────────────────
 
   function openModal() {
     setTitle('');
@@ -157,20 +157,19 @@ export default function PlannerScreen() {
         style: 'destructive',
         onPress: async () => {
           const event = events.find((e) => e.id === id);
-          if (event?.notificationId) {
-            await cancelEventNotification(event.notificationId);
-          }
+          if (event?.notificationId) await cancelEventNotification(event.notificationId);
           persist(events.filter((e) => e.id !== id));
         },
       },
     ]);
   }
 
-  // ── Derived data ─────────────────────────────────────────────────────────
+  // ── Derived ─────────────────────────────────────────────────────────────────
 
+  const calendarDays = buildMonthGrid(displayYear, displayMonth);
   const dayEvents = events.filter((e) => e.date === selectedDate);
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   function renderEvent({ item }: { item: PlannerEvent }) {
     return (
@@ -193,61 +192,95 @@ export default function PlannerScreen() {
 
   return (
     <View className="flex-1 bg-slate-50">
-      {/* Week header */}
-      <View className="flex-row items-center justify-between px-4 pt-4 pb-2">
-        <TouchableOpacity className="p-2" onPress={prevWeek}>
+
+      {/* ── Month navigation header ── */}
+      <View className="flex-row items-center justify-between px-4 pt-4 pb-3">
+        <TouchableOpacity className="p-2" onPress={prevMonth}>
           <Text className="text-2xl text-indigo-500 font-semibold">‹</Text>
         </TouchableOpacity>
-        <Text className="text-base font-bold text-slate-800">{formatMonthRange(weekStart)}</Text>
-        <TouchableOpacity className="p-2" onPress={nextWeek}>
+        <TouchableOpacity onPress={() => {
+          setDisplayYear(today.getFullYear());
+          setDisplayMonth(today.getMonth());
+          setSelectedDate(todayYMD);
+        }}>
+          <Text className="text-base font-bold text-slate-800">
+            {MONTH_NAMES[displayMonth]} {displayYear}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity className="p-2" onPress={nextMonth}>
           <Text className="text-2xl text-indigo-500 font-semibold">›</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Day strip */}
-      <View className="flex-row px-2 pb-3">
-        {weekDays.map((day, i) => {
-          const ymd = toYMD(day);
-          const isSelected = ymd === selectedDate;
-          const isToday = ymd === toYMD(today);
-          const hasEvents = events.some((e) => e.date === ymd);
-          return (
-            <TouchableOpacity
-              key={ymd}
-              className={`flex-1 items-center py-2 rounded-xl ${isSelected ? 'bg-indigo-500' : ''}`}
-              onPress={() => setSelectedDate(ymd)}
-            >
-              <Text
-                className={`text-[11px] font-semibold mb-1 ${
-                  isSelected ? 'text-indigo-100' : 'text-slate-500'
-                }`}
-              >
-                {DAY_LABELS[i]}
-              </Text>
-              <Text
-                className={`text-[15px] font-bold ${
-                  isSelected
-                    ? 'text-white'
-                    : isToday
-                    ? 'text-indigo-500'
-                    : 'text-slate-800'
-                }`}
-              >
-                {day.getDate()}
-              </Text>
-              {hasEvents && (
-                <View
-                  className={`w-[5px] h-[5px] rounded-full mt-1 ${
-                    isSelected ? 'bg-indigo-100' : 'bg-indigo-500'
-                  }`}
-                />
-              )}
-            </TouchableOpacity>
-          );
-        })}
+      {/* ── Day-of-week labels ── */}
+      <View className="flex-row px-3 pb-1">
+        {DAY_LABELS.map((label) => (
+          <View key={label} className="flex-1 items-center">
+            <Text className="text-[11px] font-semibold text-slate-400">{label}</Text>
+          </View>
+        ))}
       </View>
 
-      {/* Selected date label */}
+      {/* ── Calendar grid (6 rows × 7 cols) ── */}
+      <View className="px-3 pb-2">
+        {Array.from({ length: 6 }, (_, week) => (
+          <View key={week} className="flex-row">
+            {calendarDays.slice(week * 7, week * 7 + 7).map((day) => {
+              const ymd = toYMD(day);
+              const isCurrentMonth = day.getMonth() === displayMonth;
+              const isToday = ymd === todayYMD;
+              const isSelected = ymd === selectedDate;
+              const hasEvents = events.some((e) => e.date === ymd);
+
+              return (
+                <TouchableOpacity
+                  key={ymd}
+                  className="flex-1 items-center py-1"
+                  onPress={() => setSelectedDate(ymd)}
+                >
+                  <View
+                    className="w-[34px] h-[34px] rounded-full items-center justify-center"
+                    style={
+                      isSelected
+                        ? { backgroundColor: '#6366f1' }
+                        : isToday
+                        ? { backgroundColor: '#e0e7ff' }
+                        : undefined
+                    }
+                  >
+                    <Text
+                      className="text-[14px] font-semibold"
+                      style={{
+                        color: isSelected
+                          ? '#ffffff'
+                          : isToday
+                          ? '#6366f1'
+                          : isCurrentMonth
+                          ? '#1e293b'
+                          : '#cbd5e1',
+                      }}
+                    >
+                      {day.getDate()}
+                    </Text>
+                  </View>
+                  {/* Event dot */}
+                  <View className="h-[5px] items-center justify-center mt-[1px]">
+                    {hasEvents && (
+                      <View
+                        className="w-[5px] h-[5px] rounded-full"
+                        style={{ backgroundColor: isSelected ? '#a5b4fc' : '#6366f1' }}
+                      />
+                    )}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ))}
+      </View>
+
+      {/* ── Divider + selected date label ── */}
+      <View className="h-px bg-slate-200 mx-4 mb-3" />
       <View className="flex-row items-center justify-between px-4 mb-3">
         <Text className="text-sm font-semibold text-slate-600">
           {new Date(selectedDate + 'T00:00:00').toLocaleDateString(undefined, {
@@ -261,18 +294,18 @@ export default function PlannerScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Events list */}
+      {/* ── Events for selected day ── */}
       <FlatList
         data={dayEvents}
         keyExtractor={(item) => item.id}
         renderItem={renderEvent}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}
         ListEmptyComponent={
-          <Text className="text-center text-slate-400 mt-8 text-sm">No events for this day.</Text>
+          <Text className="text-center text-slate-400 mt-6 text-sm">No events for this day.</Text>
         }
       />
 
-      {/* Add event modal */}
+      {/* ── Add event modal ── */}
       <Modal
         visible={modalVisible}
         animationType="slide"
@@ -326,7 +359,7 @@ export default function PlannerScreen() {
             )}
 
             <TextInput
-              className="border border-slate-200 rounded-lg px-3 py-2.5 text-[15px] text-slate-800 mb-3 h-20 text-top"
+              className="border border-slate-200 rounded-lg px-3 py-2.5 text-[15px] text-slate-800 mb-3 h-20"
               placeholder="Notes (optional)…"
               placeholderTextColor="#94a3b8"
               value={notes}
@@ -336,7 +369,7 @@ export default function PlannerScreen() {
               textAlignVertical="top"
             />
 
-            <View className="flex-row gap-3 mt-1">
+            <View className="flex-row mt-1" style={{ gap: 12 }}>
               <TouchableOpacity
                 className="flex-1 border-[1.5px] border-slate-200 rounded-lg py-3 items-center"
                 onPress={() => setModalVisible(false)}

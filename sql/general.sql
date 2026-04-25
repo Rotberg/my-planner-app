@@ -22,8 +22,12 @@ create table if not exists shopping_items (
 create table if not exists shopping_lists (
   id uuid primary key default gen_random_uuid(),
   name text not null,
+  delivery_date date,
   created_at timestamptz not null default now()
 );
+
+-- Migration: add delivery_date if table already exists without it
+alter table shopping_lists add column if not exists delivery_date date;
 
 -- ─── Shopping: items belonging to a saved list ───────────────────────────────
 create table if not exists shopping_list_items (
