@@ -1,23 +1,3 @@
--- ─── Tasks ───────────────────────────────────────────────────────────────────
-create table if not exists tasks (
-  id uuid primary key default gen_random_uuid(),
-  title text not null,
-  done boolean not null default false,
-  priority text not null default 'medium',
-  due_date timestamptz,
-  created_at timestamptz not null default now()
-);
-
--- ─── Shopping: active items (current working list) ───────────────────────────
-create table if not exists shopping_items (
-  id uuid primary key default gen_random_uuid(),
-  name text not null,
-  quantity text,
-  checked boolean not null default false,
-  favorited boolean not null default false,
-  created_at timestamptz not null default now()
-);
-
 -- ─── Shopping: saved list snapshots ─────────────────────────────────────────
 create table if not exists shopping_lists (
   id uuid primary key default gen_random_uuid(),
@@ -35,8 +15,12 @@ create table if not exists shopping_list_items (
   list_id uuid not null references shopping_lists(id) on delete cascade,
   name text not null,
   quantity text,
-  checked boolean not null default false
+  checked boolean not null default false,
+  category text
 );
+
+-- Migration: add category if table already exists without it
+alter table shopping_list_items add column if not exists category text;
 
 -- ─── Catalog: reusable quick-add item templates ──────────────────────────────
 create table if not exists catalog_items (

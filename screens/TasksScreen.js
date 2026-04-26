@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { loadData, saveData } from '../utils/storage';
 
 const STORAGE_KEY = 'tasks';
@@ -267,7 +268,7 @@ export default function TasksScreen() {
   }
 
   return (
-    <View className="flex-1 bg-[#faf8f3]">
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#faf8f3' }}>
       {/* ── Input card ── */}
       <View className="m-4 p-4 bg-white rounded-xl shadow">
         <Text className="text-lg font-bold text-stone-800 mb-3">Add Task</Text>
@@ -331,7 +332,12 @@ export default function TasksScreen() {
           <TouchableOpacity
             className="flex-1 flex-row items-center justify-between border border-stone-200 rounded-lg px-3 py-2.5"
             onPress={() => {
-              setTimePickerDate(dueTime ? new Date(`1970-01-01T${dueTime}:00`) : new Date());
+              const seed = new Date();
+              if (dueTime) {
+                const [hh, mm] = dueTime.split(':').map(Number);
+                seed.setHours(hh, mm, 0, 0);
+              }
+              setTimePickerDate(seed);
               setShowTimePicker(true);
             }}
           >
@@ -493,12 +499,13 @@ export default function TasksScreen() {
         keyExtractor={(item) => item.id}
         renderItem={renderTask}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}
+        keyboardShouldPersistTaps="handled"
         ListEmptyComponent={
           <Text className="text-center text-stone-400 mt-8 text-sm">
             No tasks yet. Add one above!
           </Text>
         }
       />
-    </View>
+    </SafeAreaView>
   );
 }

@@ -3,6 +3,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -11,10 +12,53 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { z } from 'zod';
 import { loadData, saveData } from '../utils/storage';
 import { supabase } from '../utils/supabase';
 
 const STORAGE_KEY = 'shopping';
+
+const CATEGORIES = [
+  'Fresh Food',
+  'Frozen Food',
+  'Bakery',
+  'Drinks',
+  'Household',
+  'Other',
+] as const;
+type Category = (typeof CATEGORIES)[number];
+const DEFAULT_CATEGORY: Category = 'Other';
+
+function normalizeCategory(value: string | null | undefined): Category {
+  return (CATEGORIES as readonly string[]).includes(value ?? '')
+    ? (value as Category)
+    : DEFAULT_CATEGORY;
+}
+
+const ShoppingItemFormSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, 'Please enter an item name.')
+    .max(80, 'Name is too long (max 80 characters).'),
+  quantity: z
+    .string()
+    .trim()
+    .refine((v) => v === '' || /^\d+(\.\d+)?$/.test(v), {
+      message: 'Quantity must be a number (e.g. 1, 2, 1.5).',
+    })
+    .refine((v) => v === '' || Number(v) > 0, {
+      message: 'Quantity must be greater than zero.',
+    }),
+  category: z.enum(CATEGORIES),
+});
+
+const CatalogNameSchema = z
+  .string()
+  .trim()
+  .min(1, 'Please enter a name.')
+  .max(80, 'Name is too long (max 80 characters).');
 
 type ShoppingItem = {
   id: string;
@@ -22,6 +66,7 @@ type ShoppingItem = {
   quantity: string;
   checked: boolean;
   favorited: boolean;
+  category: Category;
 };
 
 type SavedList = {
@@ -37,6 +82,7 @@ type SavedListItem = {
   name: string;
   quantity: string | null;
   checked: boolean;
+  category?: string | null;
 };
 
 type CatalogItem = { id: string; name: string };
@@ -57,7 +103,8 @@ export default function ShoppingScreen() {
   const [items, setItems] = useState<ShoppingItem[]>([]);
   const [itemName, setItemName] = useState('');
   const [itemQty, setItemQty] = useState('');
-  const [listSaveName, setListSaveName] = useState('');
+  const [itemCategory, setItemCategory] = useState<Category>(DEFAULT_CATEGORY);
+  const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
   const [deliveryDate, setDeliveryDate] = useState<Date | null>(null);
   const [showDeliveryPicker, setShowDeliveryPicker] = useState(false);
 
@@ -72,10 +119,20 @@ export default function ShoppingScreen() {
   const [showFavorites, setShowFavorites] = useState(false);
   const [newCatalogName, setNewCatalogName] = useState('');
 
+  // Edit-item modal
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editQty, setEditQty] = useState('');
+  const [editCategory, setEditCategory] = useState<Category>(DEFAULT_CATEGORY);
+
   // ─── Load on mount ──────────────────────────────────────────────────────────
   useEffect(() => {
     loadData(STORAGE_KEY).then((stored) => {
-      if (stored) setItems(stored);
+      if (stored) {
+        setItems(
+          stored.map((i: ShoppingItem) => ({ ...i, category: normalizeCategory(i.category) }))
+        );
+      }
     });
     fetchCatalog();
     fetchFavorites();
@@ -107,7 +164,7 @@ export default function ShoppingScreen() {
   async function fetchListItems(listId: string) {
     const { data } = await supabase
       .from('shopping_list_items')
-      .select('id, name, quantity, checked')
+      .select('id, name, quantity, checked, category')
       .eq('list_id', listId);
     if (data) {
       setSavedLists((prev) =>
@@ -123,27 +180,41 @@ export default function ShoppingScreen() {
   }
 
   function addItem() {
-    if (!itemName.trim()) {
-      Alert.alert('Missing name', 'Please enter an item name.');
+    const parsed = ShoppingItemFormSchema.safeParse({
+      name: itemName,
+      quantity: itemQty,
+      category: itemCategory,
+    });
+    if (!parsed.success) {
+      Alert.alert('Invalid item', parsed.error.issues[0]?.message ?? 'Please check the form.');
       return;
     }
     const newItem: ShoppingItem = {
       id: Date.now().toString(),
-      name: itemName.trim(),
-      quantity: itemQty.trim(),
+      name: parsed.data.name,
+      quantity: parsed.data.quantity,
       checked: false,
       favorited: false,
+      category: parsed.data.category,
     };
     persist([...items, newItem]);
     setItemName('');
     setItemQty('');
+    setItemCategory(DEFAULT_CATEGORY);
   }
 
   function addFromCatalog(name: string) {
     if (items.some((i) => i.name.toLowerCase() === name.toLowerCase())) return;
     persist([
       ...items,
-      { id: `${Date.now()}-${Math.random()}`, name, quantity: '', checked: false, favorited: false },
+      {
+        id: `${Date.now()}-${Math.random()}`,
+        name,
+        quantity: '',
+        checked: false,
+        favorited: false,
+        category: DEFAULT_CATEGORY,
+      },
     ]);
   }
 
@@ -151,7 +222,14 @@ export default function ShoppingScreen() {
     if (items.some((i) => i.name.toLowerCase() === name.toLowerCase())) return;
     persist([
       ...items,
-      { id: `${Date.now()}-${Math.random()}`, name, quantity: '', checked: false, favorited: true },
+      {
+        id: `${Date.now()}-${Math.random()}`,
+        name,
+        quantity: '',
+        checked: false,
+        favorited: true,
+        category: DEFAULT_CATEGORY,
+      },
     ]);
   }
 
@@ -188,6 +266,7 @@ export default function ShoppingScreen() {
           quantity: qty,
           checked: false,
           favorited: false,
+          category: DEFAULT_CATEGORY,
         });
       }
 
@@ -226,6 +305,39 @@ export default function ShoppingScreen() {
     ]);
   }
 
+  function openEditItem(item: ShoppingItem) {
+    setEditingId(item.id);
+    setEditName(item.name);
+    setEditQty(item.quantity);
+    setEditCategory(item.category);
+  }
+
+  function saveEditItem() {
+    if (!editingId) return;
+    const parsed = ShoppingItemFormSchema.safeParse({
+      name: editName,
+      quantity: editQty,
+      category: editCategory,
+    });
+    if (!parsed.success) {
+      Alert.alert('Invalid item', parsed.error.issues[0]?.message ?? 'Please check the form.');
+      return;
+    }
+    persist(
+      items.map((i) =>
+        i.id === editingId
+          ? {
+              ...i,
+              name: parsed.data.name,
+              quantity: parsed.data.quantity,
+              category: parsed.data.category,
+            }
+          : i
+      )
+    );
+    setEditingId(null);
+  }
+
   function clearChecked() {
     const unchecked = items.filter((i) => !i.checked);
     if (unchecked.length === items.length) return;
@@ -241,7 +353,11 @@ export default function ShoppingScreen() {
       Alert.alert('Empty list', 'Add some items before saving.');
       return;
     }
-    const name = listSaveName.trim() || `List ${new Date().toLocaleDateString()}`;
+    const name = new Date().toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
     const { data: list, error } = await supabase
       .from('shopping_lists')
       .insert({
@@ -262,20 +378,24 @@ export default function ShoppingScreen() {
         name: i.name,
         quantity: i.quantity || null,
         checked: i.checked,
+        category: i.category,
       }))
     );
 
-    setListSaveName('');
     setDeliveryDate(null);
     Alert.alert('Saved!', `"${name}" has been saved.`);
   }
 
   // ─── Catalog management ─────────────────────────────────────────────────────
   async function addToCatalog() {
-    if (!newCatalogName.trim()) return;
+    const parsed = CatalogNameSchema.safeParse(newCatalogName);
+    if (!parsed.success) {
+      Alert.alert('Invalid name', parsed.error.issues[0]?.message ?? 'Please check the name.');
+      return;
+    }
     await supabase
       .from('catalog_items')
-      .upsert({ name: newCatalogName.trim() }, { onConflict: 'name' });
+      .upsert({ name: parsed.data }, { onConflict: 'name' });
     setNewCatalogName('');
     fetchCatalog();
   }
@@ -323,6 +443,7 @@ export default function ShoppingScreen() {
               quantity: i.quantity ?? '',
               checked: false,
               favorited: false,
+              category: normalizeCategory(i.category),
             }))
           );
           setView('current');
@@ -360,7 +481,7 @@ export default function ShoppingScreen() {
   // ─── History view ───────────────────────────────────────────────────────────
   if (view === 'history') {
     return (
-      <View className="flex-1 bg-[#faf8f3]">
+      <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#faf8f3' }}>
         <TabBar />
         <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
           {savedLists.length === 0 ? (
@@ -384,9 +505,8 @@ export default function ShoppingScreen() {
                     }}
                   >
                     <View className="flex-1">
-                      <Text className="text-[15px] font-semibold text-stone-800">{list.name}</Text>
-                      <Text className="text-xs text-stone-400 mt-0.5">
-                        Created {formatShortDate(list.created_at.split('T')[0])}
+                      <Text className="text-[15px] font-semibold text-stone-800">
+                        {formatShortDate(list.created_at.split('T')[0])}
                       </Text>
                       {list.delivery_date && (
                         <Text className="text-xs text-teal-700 mt-0.5">
@@ -436,15 +556,18 @@ export default function ShoppingScreen() {
             })
           )}
         </ScrollView>
-      </View>
+      </SafeAreaView>
     );
   }
 
   // ─── Current list view ──────────────────────────────────────────────────────
   return (
-    <View className="flex-1 bg-[#faf8f3]">
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#faf8f3' }}>
       <TabBar />
-      <ScrollView contentContainerStyle={{ paddingBottom: 32 }}>
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 32 }}
+        keyboardShouldPersistTaps="handled"
+      >
 
         {/* ── Add Item card ── */}
         <View className="mx-4 mb-3 p-4 bg-white rounded-xl shadow">
@@ -484,7 +607,7 @@ export default function ShoppingScreen() {
                   onSubmitEditing={addToCatalog}
                 />
                 <TouchableOpacity
-                  className="bg-[#faf8f3]0 rounded-lg px-3 py-2 items-center justify-center"
+                  className="bg-teal-600 rounded-lg px-3 py-2 items-center justify-center"
                   onPress={addToCatalog}
                 >
                   <Text className="text-white text-sm font-bold">Add</Text>
@@ -582,13 +705,39 @@ export default function ShoppingScreen() {
 
           <TextInput
             className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
-            placeholder="Quantity (optional, e.g. 2, 500g)…"
+            placeholder="Quantity (optional, numeric e.g. 2 or 1.5)…"
             placeholderTextColor="#a8a29e"
             value={itemQty}
             onChangeText={setItemQty}
+            keyboardType="decimal-pad"
             returnKeyType="done"
             onSubmitEditing={addItem}
           />
+
+          <Text className="text-xs font-semibold text-stone-500 mb-1.5">Category</Text>
+          <View className="flex-row flex-wrap mb-3" style={{ gap: 6 }}>
+            {CATEGORIES.map((cat) => {
+              const selected = itemCategory === cat;
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  className="rounded-full px-3 py-1 border"
+                  style={
+                    selected
+                      ? { backgroundColor: '#0d9488', borderColor: '#0d9488' }
+                      : { borderColor: '#e7e5e4' }
+                  }
+                  onPress={() => setItemCategory(cat)}
+                >
+                  <Text
+                    className={`text-xs font-semibold ${selected ? 'text-white' : 'text-stone-500'}`}
+                  >
+                    {cat}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
 
           <TouchableOpacity
             className="bg-teal-600 rounded-lg py-3 items-center mb-2"
@@ -609,26 +758,14 @@ export default function ShoppingScreen() {
         {/* ── Save current list ── */}
         {items.length > 0 && (
           <View className="mx-4 mb-3 p-4 bg-white rounded-xl shadow">
-            <Text className="text-sm font-bold text-stone-700 mb-2">Save List to DB</Text>
-            <View className="flex-row mb-2" style={{ gap: 8 }}>
-              <TextInput
-                className="flex-1 border border-stone-200 rounded-lg px-3 py-2 text-sm text-stone-800"
-                placeholder="List name (e.g. Weekly Shop)…"
-                placeholderTextColor="#a8a29e"
-                value={listSaveName}
-                onChangeText={setListSaveName}
-              />
-              <TouchableOpacity
-                className="bg-teal-600 rounded-lg px-4 py-2 items-center justify-center"
-                onPress={saveCurrentList}
-              >
-                <Text className="text-white text-sm font-bold">Save</Text>
-              </TouchableOpacity>
-            </View>
+            <Text className="text-sm font-bold text-stone-700 mb-2">Save List</Text>
+            <Text className="text-xs text-stone-400 mb-2">
+              Saved as today&apos;s date.
+            </Text>
 
             {/* Delivery date */}
             <TouchableOpacity
-              className="flex-row items-center justify-between border border-stone-200 rounded-lg px-3 py-2.5"
+              className="flex-row items-center justify-between border border-stone-200 rounded-lg px-3 py-2.5 mb-2"
               onPress={() => setShowDeliveryPicker(true)}
             >
               <Text className="text-sm text-stone-600">
@@ -659,6 +796,13 @@ export default function ShoppingScreen() {
                 }}
               />
             )}
+
+            <TouchableOpacity
+              className="bg-teal-600 rounded-lg py-2.5 items-center"
+              onPress={saveCurrentList}
+            >
+              <Text className="text-white text-sm font-bold">Save List</Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -677,52 +821,155 @@ export default function ShoppingScreen() {
           </View>
         )}
 
-        {/* ── Items ── */}
+        {/* ── Items, grouped by category ── */}
         {items.length === 0 ? (
           <Text className="text-center text-stone-400 mt-6 text-sm px-4">
             Your shopping list is empty. Add something above!
           </Text>
         ) : (
           <View className="px-4">
-            {items.map((item) => (
-              <View
-                key={item.id}
-                className="flex-row items-center bg-white rounded-[10px] p-3 mb-2.5 shadow-sm"
-              >
-                <Pressable
-                  className="w-[22px] h-[22px] rounded-[6px] border-2 border-teal-600 mr-3 items-center justify-center"
-                  onPress={() => toggleChecked(item.id)}
-                >
-                  {item.checked && <View className="w-[11px] h-[11px] rounded-[3px] bg-teal-600" />}
-                </Pressable>
-
-                <View className="flex-1">
-                  <Text
-                    className={`text-[15px] font-medium ${
-                      item.checked ? 'line-through text-stone-400' : 'text-stone-800'
-                    }`}
+            {CATEGORIES.map((cat) => {
+              const groupItems = items.filter((i) => i.category === cat);
+              if (groupItems.length === 0) return null;
+              const collapsed = !!collapsedCategories[cat];
+              return (
+                <View key={cat} className="mb-3">
+                  <TouchableOpacity
+                    className="flex-row items-center bg-stone-100 rounded-lg px-3 py-2 mb-2"
+                    onPress={() =>
+                      setCollapsedCategories((prev) => ({ ...prev, [cat]: !collapsed }))
+                    }
                   >
-                    {item.name}
-                  </Text>
-                  {item.quantity ? (
-                    <Text className="text-xs text-stone-400 mt-0.5">{item.quantity}</Text>
-                  ) : null}
+                    <Text className="text-stone-500 text-xs mr-1.5">{collapsed ? '›' : '⌄'}</Text>
+                    <Text className="text-[13px] font-semibold text-stone-700 flex-1">{cat}</Text>
+                    <Text className="text-[12px] text-stone-500">{groupItems.length}</Text>
+                  </TouchableOpacity>
+
+                  {!collapsed &&
+                    groupItems.map((item) => (
+                      <View
+                        key={item.id}
+                        className="flex-row items-center bg-white rounded-[10px] p-3 mb-2 shadow-sm"
+                      >
+                        <Pressable
+                          className="w-[22px] h-[22px] rounded-[6px] border-2 border-teal-600 mr-3 items-center justify-center"
+                          onPress={() => toggleChecked(item.id)}
+                        >
+                          {item.checked && (
+                            <View className="w-[11px] h-[11px] rounded-[3px] bg-teal-600" />
+                          )}
+                        </Pressable>
+
+                        <TouchableOpacity className="flex-1" onPress={() => openEditItem(item)}>
+                          <Text
+                            className={`text-[15px] font-medium ${
+                              item.checked ? 'line-through text-stone-400' : 'text-stone-800'
+                            }`}
+                          >
+                            {item.name}
+                          </Text>
+                          {item.quantity ? (
+                            <Text className="text-xs text-stone-400 mt-0.5">{item.quantity}</Text>
+                          ) : null}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity className="p-1 mr-1" onPress={() => toggleFavorite(item)}>
+                          <Text
+                            className="text-xl"
+                            style={{ color: item.favorited ? '#c2891c' : '#d6d3d1' }}
+                          >
+                            ★
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity className="p-1" onPress={() => confirmDeleteItem(item.id)}>
+                          <Text className="text-sm text-stone-400">✕</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ))}
                 </View>
-
-                <TouchableOpacity className="p-1 mr-1" onPress={() => toggleFavorite(item)}>
-                  <Text className="text-xl" style={{ color: item.favorited ? '#c2891c' : '#d6d3d1' }}>
-                    ★
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity className="p-1" onPress={() => confirmDeleteItem(item.id)}>
-                  <Text className="text-sm text-stone-400">✕</Text>
-                </TouchableOpacity>
-              </View>
-            ))}
+              );
+            })}
           </View>
         )}
       </ScrollView>
-    </View>
+
+      {/* ── Edit-item modal ── */}
+      <Modal
+        visible={editingId !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setEditingId(null)}
+      >
+        <Pressable
+          className="flex-1 bg-black/40 justify-end"
+          onPress={() => setEditingId(null)}
+        >
+          <Pressable className="bg-white rounded-t-[20px] p-6 pb-10" onPress={() => {}}>
+            <Text className="text-xl font-bold text-stone-800 mb-4">Edit Item</Text>
+
+            <TextInput
+              className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
+              placeholder="Item name…"
+              placeholderTextColor="#a8a29e"
+              value={editName}
+              onChangeText={setEditName}
+              autoFocus
+            />
+
+            <TextInput
+              className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
+              placeholder="Quantity (optional, numeric)…"
+              placeholderTextColor="#a8a29e"
+              value={editQty}
+              onChangeText={setEditQty}
+              keyboardType="decimal-pad"
+            />
+
+            <Text className="text-xs font-semibold text-stone-500 mb-1.5">Category</Text>
+            <View className="flex-row flex-wrap mb-4" style={{ gap: 6 }}>
+              {CATEGORIES.map((cat) => {
+                const selected = editCategory === cat;
+                return (
+                  <TouchableOpacity
+                    key={cat}
+                    className="rounded-full px-3 py-1 border"
+                    style={
+                      selected
+                        ? { backgroundColor: '#0d9488', borderColor: '#0d9488' }
+                        : { borderColor: '#e7e5e4' }
+                    }
+                    onPress={() => setEditCategory(cat)}
+                  >
+                    <Text
+                      className={`text-xs font-semibold ${
+                        selected ? 'text-white' : 'text-stone-500'
+                      }`}
+                    >
+                      {cat}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View className="flex-row" style={{ gap: 12 }}>
+              <TouchableOpacity
+                className="flex-1 border-[1.5px] border-stone-200 rounded-lg py-3 items-center"
+                onPress={() => setEditingId(null)}
+              >
+                <Text className="text-[15px] font-semibold text-stone-500">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                className="flex-1 bg-teal-600 rounded-lg py-3 items-center"
+                onPress={saveEditItem}
+              >
+                <Text className="text-[15px] font-bold text-white">Save</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </SafeAreaView>
   );
 }

@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { cancelEventNotification, scheduleEventNotification } from '../utils/notifications';
 import { loadData, saveData } from '../utils/storage';
 
@@ -191,7 +192,7 @@ export default function PlannerScreen() {
   }
 
   return (
-    <View className="flex-1 bg-[#faf8f3]">
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#faf8f3' }}>
 
       {/* ── Month navigation header ── */}
       <View className="flex-row items-center justify-between px-4 pt-4 pb-3">
@@ -386,6 +387,6 @@ export default function PlannerScreen() {
           </Pressable>
         </Pressable>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
