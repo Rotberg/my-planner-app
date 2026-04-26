@@ -175,40 +175,40 @@ export default function PlannerScreen() {
     return (
       <View className="flex-row items-start bg-white rounded-[10px] p-3 mb-2.5 shadow-sm">
         <View className="w-[68px] mr-2.5">
-          <Text className="text-xs font-bold text-indigo-500">{formatEventTime(item.time)}</Text>
+          <Text className="text-xs font-bold text-teal-700">{formatEventTime(item.time)}</Text>
         </View>
         <View className="flex-1">
-          <Text className="text-[15px] font-semibold text-slate-800">{item.title}</Text>
+          <Text className="text-[15px] font-semibold text-stone-800">{item.title}</Text>
           {item.notes ? (
-            <Text className="text-[13px] text-slate-500 mt-[3px]">{item.notes}</Text>
+            <Text className="text-[13px] text-stone-500 mt-[3px]">{item.notes}</Text>
           ) : null}
         </View>
         <TouchableOpacity className="p-1" onPress={() => confirmDelete(item.id)}>
-          <Text className="text-sm text-slate-400">✕</Text>
+          <Text className="text-sm text-stone-400">✕</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
   return (
-    <View className="flex-1 bg-slate-50">
+    <View className="flex-1 bg-[#faf8f3]">
 
       {/* ── Month navigation header ── */}
       <View className="flex-row items-center justify-between px-4 pt-4 pb-3">
         <TouchableOpacity className="p-2" onPress={prevMonth}>
-          <Text className="text-2xl text-indigo-500 font-semibold">‹</Text>
+          <Text className="text-2xl text-teal-700 font-semibold">‹</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={() => {
           setDisplayYear(today.getFullYear());
           setDisplayMonth(today.getMonth());
           setSelectedDate(todayYMD);
         }}>
-          <Text className="text-base font-bold text-slate-800">
+          <Text className="text-base font-bold text-stone-800">
             {MONTH_NAMES[displayMonth]} {displayYear}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity className="p-2" onPress={nextMonth}>
-          <Text className="text-2xl text-indigo-500 font-semibold">›</Text>
+          <Text className="text-2xl text-teal-700 font-semibold">›</Text>
         </TouchableOpacity>
       </View>
 
@@ -216,7 +216,7 @@ export default function PlannerScreen() {
       <View className="flex-row px-3 pb-1">
         {DAY_LABELS.map((label) => (
           <View key={label} className="flex-1 items-center">
-            <Text className="text-[11px] font-semibold text-slate-400">{label}</Text>
+            <Text className="text-[11px] font-semibold text-stone-400">{label}</Text>
           </View>
         ))}
       </View>
@@ -242,9 +242,9 @@ export default function PlannerScreen() {
                     className="w-[34px] h-[34px] rounded-full items-center justify-center"
                     style={
                       isSelected
-                        ? { backgroundColor: '#6366f1' }
+                        ? { backgroundColor: '#0d9488' }
                         : isToday
-                        ? { backgroundColor: '#e0e7ff' }
+                        ? { backgroundColor: '#ccfbf1' }
                         : undefined
                     }
                   >
@@ -254,10 +254,10 @@ export default function PlannerScreen() {
                         color: isSelected
                           ? '#ffffff'
                           : isToday
-                          ? '#6366f1'
+                          ? '#0d9488'
                           : isCurrentMonth
-                          ? '#1e293b'
-                          : '#cbd5e1',
+                          ? '#1f2933'
+                          : '#d6d3d1',
                       }}
                     >
                       {day.getDate()}
@@ -268,7 +268,7 @@ export default function PlannerScreen() {
                     {hasEvents && (
                       <View
                         className="w-[5px] h-[5px] rounded-full"
-                        style={{ backgroundColor: isSelected ? '#a5b4fc' : '#6366f1' }}
+                        style={{ backgroundColor: isSelected ? '#5eead4' : '#0d9488' }}
                       />
                     )}
                   </View>
@@ -280,16 +280,16 @@ export default function PlannerScreen() {
       </View>
 
       {/* ── Divider + selected date label ── */}
-      <View className="h-px bg-slate-200 mx-4 mb-3" />
+      <View className="h-px bg-stone-200 mx-4 mb-3" />
       <View className="flex-row items-center justify-between px-4 mb-3">
-        <Text className="text-sm font-semibold text-slate-600">
+        <Text className="text-sm font-semibold text-stone-600">
           {new Date(selectedDate + 'T00:00:00').toLocaleDateString(undefined, {
             weekday: 'long',
             month: 'long',
             day: 'numeric',
           })}
         </Text>
-        <TouchableOpacity className="bg-indigo-500 rounded-lg px-3.5 py-2" onPress={openModal}>
+        <TouchableOpacity className="bg-teal-600 rounded-lg px-3.5 py-2" onPress={openModal}>
           <Text className="text-white text-[13px] font-bold">+ Add Event</Text>
         </TouchableOpacity>
       </View>
@@ -301,7 +301,7 @@ export default function PlannerScreen() {
         renderItem={renderEvent}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}
         ListEmptyComponent={
-          <Text className="text-center text-slate-400 mt-6 text-sm">No events for this day.</Text>
+          <Text className="text-center text-stone-400 mt-6 text-sm">No events for this day.</Text>
         }
       />
 
@@ -317,8 +317,8 @@ export default function PlannerScreen() {
           onPress={() => setModalVisible(false)}
         >
           <Pressable className="bg-white rounded-t-[20px] p-6 pb-10" onPress={() => {}}>
-            <Text className="text-xl font-bold text-slate-800 mb-0.5">New Event</Text>
-            <Text className="text-[13px] text-slate-500 mb-4">
+            <Text className="text-xl font-bold text-stone-800 mb-0.5">New Event</Text>
+            <Text className="text-[13px] text-stone-500 mb-4">
               {new Date(selectedDate + 'T00:00:00').toLocaleDateString(undefined, {
                 weekday: 'long',
                 month: 'long',
@@ -327,9 +327,9 @@ export default function PlannerScreen() {
             </Text>
 
             <TextInput
-              className="border border-slate-200 rounded-lg px-3 py-2.5 text-[15px] text-slate-800 mb-3"
+              className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
               placeholder="Event title…"
-              placeholderTextColor="#94a3b8"
+              placeholderTextColor="#a8a29e"
               value={title}
               onChangeText={setTitle}
               returnKeyType="next"
@@ -337,10 +337,10 @@ export default function PlannerScreen() {
             />
 
             <TouchableOpacity
-              className="border border-slate-200 rounded-lg px-3 py-2.5 mb-3"
+              className="border border-stone-200 rounded-lg px-3 py-2.5 mb-3"
               onPress={() => setShowTimePicker(true)}
             >
-              <Text className="text-sm text-slate-600">
+              <Text className="text-sm text-stone-600">
                 Time: {formatEventTime(toHHMM(eventTime))}
               </Text>
             </TouchableOpacity>
@@ -359,9 +359,9 @@ export default function PlannerScreen() {
             )}
 
             <TextInput
-              className="border border-slate-200 rounded-lg px-3 py-2.5 text-[15px] text-slate-800 mb-3 h-20"
+              className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3 h-20"
               placeholder="Notes (optional)…"
-              placeholderTextColor="#94a3b8"
+              placeholderTextColor="#a8a29e"
               value={notes}
               onChangeText={setNotes}
               multiline
@@ -371,13 +371,13 @@ export default function PlannerScreen() {
 
             <View className="flex-row mt-1" style={{ gap: 12 }}>
               <TouchableOpacity
-                className="flex-1 border-[1.5px] border-slate-200 rounded-lg py-3 items-center"
+                className="flex-1 border-[1.5px] border-stone-200 rounded-lg py-3 items-center"
                 onPress={() => setModalVisible(false)}
               >
-                <Text className="text-[15px] font-semibold text-slate-500">Cancel</Text>
+                <Text className="text-[15px] font-semibold text-stone-500">Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                className="flex-1 bg-indigo-500 rounded-lg py-3 items-center"
+                className="flex-1 bg-teal-600 rounded-lg py-3 items-center"
                 onPress={saveEvent}
               >
                 <Text className="text-[15px] font-bold text-white">Save</Text>

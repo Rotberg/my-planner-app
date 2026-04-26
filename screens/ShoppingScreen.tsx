@@ -334,12 +334,12 @@ export default function ShoppingScreen() {
   // ─── Shared tab bar ─────────────────────────────────────────────────────────
   function TabBar() {
     return (
-      <View className="flex-row mx-4 mt-4 mb-3 bg-slate-200 rounded-xl p-1">
+      <View className="flex-row mx-4 mt-4 mb-3 bg-stone-200 rounded-xl p-1">
         <Pressable
           className={`flex-1 py-2 rounded-lg items-center ${view === 'current' ? 'bg-white shadow-sm' : ''}`}
           onPress={() => setView('current')}
         >
-          <Text className={`text-sm font-semibold ${view === 'current' ? 'text-green-600' : 'text-slate-500'}`}>
+          <Text className={`text-sm font-semibold ${view === 'current' ? 'text-teal-700' : 'text-stone-500'}`}>
             Current List
           </Text>
         </Pressable>
@@ -347,7 +347,7 @@ export default function ShoppingScreen() {
           className={`flex-1 py-2 rounded-lg items-center ${view === 'history' ? 'bg-white shadow-sm' : ''}`}
           onPress={() => setView('history')}
         >
-          <Text className={`text-sm font-semibold ${view === 'history' ? 'text-green-600' : 'text-slate-500'}`}>
+          <Text className={`text-sm font-semibold ${view === 'history' ? 'text-teal-700' : 'text-stone-500'}`}>
             Saved Lists
           </Text>
         </Pressable>
@@ -360,11 +360,11 @@ export default function ShoppingScreen() {
   // ─── History view ───────────────────────────────────────────────────────────
   if (view === 'history') {
     return (
-      <View className="flex-1 bg-slate-50">
+      <View className="flex-1 bg-[#faf8f3]">
         <TabBar />
         <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
           {savedLists.length === 0 ? (
-            <Text className="text-center text-slate-400 mt-8 text-sm">
+            <Text className="text-center text-stone-400 mt-8 text-sm">
               No saved lists yet. Save your current list to see it here.
             </Text>
           ) : (
@@ -384,49 +384,49 @@ export default function ShoppingScreen() {
                     }}
                   >
                     <View className="flex-1">
-                      <Text className="text-[15px] font-semibold text-slate-800">{list.name}</Text>
-                      <Text className="text-xs text-slate-400 mt-0.5">
+                      <Text className="text-[15px] font-semibold text-stone-800">{list.name}</Text>
+                      <Text className="text-xs text-stone-400 mt-0.5">
                         Created {formatShortDate(list.created_at.split('T')[0])}
                       </Text>
                       {list.delivery_date && (
-                        <Text className="text-xs text-indigo-500 mt-0.5">
+                        <Text className="text-xs text-teal-700 mt-0.5">
                           Delivery: {formatShortDate(list.delivery_date)}
                         </Text>
                       )}
                     </View>
                     <TouchableOpacity className="p-1.5 mr-2" onPress={() => confirmDeleteSavedList(list.id)}>
-                      <Text className="text-slate-400 text-[15px]">🗑</Text>
+                      <Text className="text-stone-400 text-[15px]">🗑</Text>
                     </TouchableOpacity>
-                    <Text className="text-slate-400 text-xs">{isExpanded ? '▲' : '▼'}</Text>
+                    <Text className="text-stone-400 text-xs">{isExpanded ? '▲' : '▼'}</Text>
                   </TouchableOpacity>
 
                   {isExpanded && (
-                    <View className="border-t border-slate-100 px-4 pb-4">
+                    <View className="border-t border-stone-100 px-4 pb-4">
                       {list.items === undefined ? (
-                        <Text className="text-slate-400 text-sm py-3">Loading…</Text>
+                        <Text className="text-stone-400 text-sm py-3">Loading…</Text>
                       ) : list.items.length === 0 ? (
-                        <Text className="text-slate-400 text-sm py-3">No items in this list.</Text>
+                        <Text className="text-stone-400 text-sm py-3">No items in this list.</Text>
                       ) : (
                         list.items.map((item) => (
-                          <View key={item.id} className="flex-row items-center py-2 border-b border-slate-50">
+                          <View key={item.id} className="flex-row items-center py-2 border-b border-stone-100">
                             <Text
                               className={`flex-1 text-sm ${
-                                item.checked ? 'line-through text-slate-400' : 'text-slate-700'
+                                item.checked ? 'line-through text-stone-400' : 'text-stone-700'
                               }`}
                             >
                               {item.name}
                               {item.quantity ? ` — ${item.quantity}` : ''}
                             </Text>
-                            {item.checked && <Text className="text-xs text-green-500 font-bold">✓</Text>}
+                            {item.checked && <Text className="text-xs text-teal-600 font-bold">✓</Text>}
                           </View>
                         ))
                       )}
                       {list.items && list.items.length > 0 && (
                         <TouchableOpacity
-                          className="mt-3 bg-green-50 border border-green-200 rounded-lg py-2.5 items-center"
+                          className="mt-3 bg-teal-50 border border-teal-200 rounded-lg py-2.5 items-center"
                           onPress={() => loadListToCurrent(list)}
                         >
-                          <Text className="text-sm font-semibold text-green-600">Load to Current List</Text>
+                          <Text className="text-sm font-semibold text-teal-700">Load to Current List</Text>
                         </TouchableOpacity>
                       )}
                     </View>
@@ -442,21 +442,21 @@ export default function ShoppingScreen() {
 
   // ─── Current list view ──────────────────────────────────────────────────────
   return (
-    <View className="flex-1 bg-slate-50">
+    <View className="flex-1 bg-[#faf8f3]">
       <TabBar />
       <ScrollView contentContainerStyle={{ paddingBottom: 32 }}>
 
         {/* ── Add Item card ── */}
         <View className="mx-4 mb-3 p-4 bg-white rounded-xl shadow">
-          <Text className="text-lg font-bold text-slate-800 mb-3">Add Item</Text>
+          <Text className="text-lg font-bold text-stone-800 mb-3">Add Item</Text>
 
           {/* Catalog quick-add */}
           <TouchableOpacity
             className="flex-row items-center mb-2"
             onPress={() => setShowCatalog(!showCatalog)}
           >
-            <Text className="text-sm font-semibold text-slate-600 mr-1">From Catalog</Text>
-            <Text className="text-xs text-slate-400">{showCatalog ? '▲' : '▼'}</Text>
+            <Text className="text-sm font-semibold text-stone-600 mr-1">From Catalog</Text>
+            <Text className="text-xs text-stone-400">{showCatalog ? '▲' : '▼'}</Text>
           </TouchableOpacity>
 
           {showCatalog && (
@@ -465,32 +465,32 @@ export default function ShoppingScreen() {
                 {catalogItems.map((c) => (
                   <TouchableOpacity
                     key={c.id}
-                    className="bg-slate-100 rounded-full px-3 py-1.5 border border-slate-200"
+                    className="bg-stone-100 rounded-full px-3 py-1.5 border border-stone-200"
                     onPress={() => addFromCatalog(c.name)}
                     onLongPress={() => confirmDeleteCatalog(c)}
                   >
-                    <Text className="text-xs text-slate-600 font-medium">+ {c.name}</Text>
+                    <Text className="text-xs text-stone-600 font-medium">+ {c.name}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
               <View className="flex-row" style={{ gap: 8 }}>
                 <TextInput
-                  className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800"
+                  className="flex-1 border border-stone-200 rounded-lg px-3 py-2 text-sm text-stone-800"
                   placeholder="Add item to catalog…"
-                  placeholderTextColor="#94a3b8"
+                  placeholderTextColor="#a8a29e"
                   value={newCatalogName}
                   onChangeText={setNewCatalogName}
                   returnKeyType="done"
                   onSubmitEditing={addToCatalog}
                 />
                 <TouchableOpacity
-                  className="bg-slate-500 rounded-lg px-3 py-2 items-center justify-center"
+                  className="bg-[#faf8f3]0 rounded-lg px-3 py-2 items-center justify-center"
                   onPress={addToCatalog}
                 >
                   <Text className="text-white text-sm font-bold">Add</Text>
                 </TouchableOpacity>
               </View>
-              <Text className="text-[11px] text-slate-400 mt-1">Long-press a chip to remove it</Text>
+              <Text className="text-[11px] text-stone-400 mt-1">Long-press a chip to remove it</Text>
             </View>
           )}
 
@@ -501,18 +501,18 @@ export default function ShoppingScreen() {
                 className="flex-row items-center mb-2"
                 onPress={() => setShowFavorites(!showFavorites)}
               >
-                <Text className="text-sm font-semibold text-yellow-600 mr-1">★ Favorites</Text>
-                <Text className="text-xs text-slate-400">{showFavorites ? '▲' : '▼'}</Text>
+                <Text className="text-sm font-semibold text-amber-700 mr-1">★ Favorites</Text>
+                <Text className="text-xs text-stone-400">{showFavorites ? '▲' : '▼'}</Text>
               </TouchableOpacity>
               {showFavorites && (
                 <View className="flex-row flex-wrap mb-3" style={{ gap: 6 }}>
                   {favoriteItems.map((f) => (
                     <TouchableOpacity
                       key={f.id}
-                      className="bg-yellow-50 rounded-full px-3 py-1.5 border border-yellow-200"
+                      className="bg-amber-50 rounded-full px-3 py-1.5 border border-amber-200"
                       onPress={() => addFromFavorites(f.name)}
                     >
-                      <Text className="text-xs text-yellow-700 font-medium">★ {f.name}</Text>
+                      <Text className="text-xs text-amber-800 font-medium">★ {f.name}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -548,28 +548,28 @@ export default function ShoppingScreen() {
             return (
               <View className="mb-3">
                 <TextInput
-                  className={`border border-slate-200 px-3 py-2.5 text-[15px] text-slate-800 ${
+                  className={`border border-stone-200 px-3 py-2.5 text-[15px] text-stone-800 ${
                     suggestions.length > 0 ? 'rounded-t-lg' : 'rounded-lg'
                   }`}
                   placeholder="Item name…"
-                  placeholderTextColor="#94a3b8"
+                  placeholderTextColor="#a8a29e"
                   value={itemName}
                   onChangeText={setItemName}
                   returnKeyType="next"
                 />
                 {suggestions.length > 0 && (
-                  <View className="border border-t-0 border-slate-200 rounded-b-lg overflow-hidden bg-white">
+                  <View className="border border-t-0 border-stone-200 rounded-b-lg overflow-hidden bg-white">
                     {suggestions.slice(0, 6).map((s, index) => (
                       <TouchableOpacity
                         key={s.name}
                         className={`flex-row items-center px-3 py-2.5 ${
-                          index > 0 ? 'border-t border-slate-100' : ''
+                          index > 0 ? 'border-t border-stone-100' : ''
                         }`}
                         onPress={() => setItemName(s.name)}
                       >
-                        {s.isFavorite && <Text className="text-yellow-400 mr-2 text-sm">★</Text>}
-                        <Text className="text-[14px] text-slate-700 flex-1">{s.name}</Text>
-                        <Text className="text-[11px] text-slate-400">
+                        {s.isFavorite && <Text className="text-amber-500 mr-2 text-sm">★</Text>}
+                        <Text className="text-[14px] text-stone-700 flex-1">{s.name}</Text>
+                        <Text className="text-[11px] text-stone-400">
                           {s.isFavorite ? 'favourite' : 'catalog'}
                         </Text>
                       </TouchableOpacity>
@@ -581,9 +581,9 @@ export default function ShoppingScreen() {
           })()}
 
           <TextInput
-            className="border border-slate-200 rounded-lg px-3 py-2.5 text-[15px] text-slate-800 mb-3"
+            className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
             placeholder="Quantity (optional, e.g. 2, 500g)…"
-            placeholderTextColor="#94a3b8"
+            placeholderTextColor="#a8a29e"
             value={itemQty}
             onChangeText={setItemQty}
             returnKeyType="done"
@@ -591,7 +591,7 @@ export default function ShoppingScreen() {
           />
 
           <TouchableOpacity
-            className="bg-green-500 rounded-lg py-3 items-center mb-2"
+            className="bg-teal-600 rounded-lg py-3 items-center mb-2"
             onPress={addItem}
           >
             <Text className="text-white text-[15px] font-bold">Add to List</Text>
@@ -599,27 +599,27 @@ export default function ShoppingScreen() {
 
           {/* Import from file */}
           <TouchableOpacity
-            className="border border-slate-200 rounded-lg py-2.5 items-center"
+            className="border border-stone-200 rounded-lg py-2.5 items-center"
             onPress={importFromFile}
           >
-            <Text className="text-sm font-semibold text-slate-500">Import .csv / .txt</Text>
+            <Text className="text-sm font-semibold text-stone-500">Import .csv / .txt</Text>
           </TouchableOpacity>
         </View>
 
         {/* ── Save current list ── */}
         {items.length > 0 && (
           <View className="mx-4 mb-3 p-4 bg-white rounded-xl shadow">
-            <Text className="text-sm font-bold text-slate-700 mb-2">Save List to DB</Text>
+            <Text className="text-sm font-bold text-stone-700 mb-2">Save List to DB</Text>
             <View className="flex-row mb-2" style={{ gap: 8 }}>
               <TextInput
-                className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800"
+                className="flex-1 border border-stone-200 rounded-lg px-3 py-2 text-sm text-stone-800"
                 placeholder="List name (e.g. Weekly Shop)…"
-                placeholderTextColor="#94a3b8"
+                placeholderTextColor="#a8a29e"
                 value={listSaveName}
                 onChangeText={setListSaveName}
               />
               <TouchableOpacity
-                className="bg-indigo-500 rounded-lg px-4 py-2 items-center justify-center"
+                className="bg-teal-600 rounded-lg px-4 py-2 items-center justify-center"
                 onPress={saveCurrentList}
               >
                 <Text className="text-white text-sm font-bold">Save</Text>
@@ -628,10 +628,10 @@ export default function ShoppingScreen() {
 
             {/* Delivery date */}
             <TouchableOpacity
-              className="flex-row items-center justify-between border border-slate-200 rounded-lg px-3 py-2.5"
+              className="flex-row items-center justify-between border border-stone-200 rounded-lg px-3 py-2.5"
               onPress={() => setShowDeliveryPicker(true)}
             >
-              <Text className="text-sm text-slate-600">
+              <Text className="text-sm text-stone-600">
                 {deliveryDate
                   ? `Delivery: ${deliveryDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
                   : 'Add delivery date (optional)'}
@@ -643,7 +643,7 @@ export default function ShoppingScreen() {
                     setDeliveryDate(null);
                   }}
                 >
-                  <Text className="text-xs text-red-400 font-semibold">Clear</Text>
+                  <Text className="text-xs text-rose-600 font-semibold">Clear</Text>
                 </TouchableOpacity>
               )}
             </TouchableOpacity>
@@ -665,13 +665,13 @@ export default function ShoppingScreen() {
         {/* ── List header ── */}
         {items.length > 0 && (
           <View className="flex-row justify-between items-center px-4 mb-2">
-            <Text className="text-[13px] text-slate-500">
+            <Text className="text-[13px] text-stone-500">
               {items.length} item{items.length !== 1 ? 's' : ''}
               {checkedCount > 0 ? ` · ${checkedCount} ticked` : ''}
             </Text>
             {checkedCount > 0 && (
               <TouchableOpacity onPress={clearChecked}>
-                <Text className="text-[13px] text-red-500 font-semibold">Clear ticked</Text>
+                <Text className="text-[13px] text-rose-700 font-semibold">Clear ticked</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -679,7 +679,7 @@ export default function ShoppingScreen() {
 
         {/* ── Items ── */}
         {items.length === 0 ? (
-          <Text className="text-center text-slate-400 mt-6 text-sm px-4">
+          <Text className="text-center text-stone-400 mt-6 text-sm px-4">
             Your shopping list is empty. Add something above!
           </Text>
         ) : (
@@ -690,33 +690,33 @@ export default function ShoppingScreen() {
                 className="flex-row items-center bg-white rounded-[10px] p-3 mb-2.5 shadow-sm"
               >
                 <Pressable
-                  className="w-[22px] h-[22px] rounded-[6px] border-2 border-green-500 mr-3 items-center justify-center"
+                  className="w-[22px] h-[22px] rounded-[6px] border-2 border-teal-600 mr-3 items-center justify-center"
                   onPress={() => toggleChecked(item.id)}
                 >
-                  {item.checked && <View className="w-[11px] h-[11px] rounded-[3px] bg-green-500" />}
+                  {item.checked && <View className="w-[11px] h-[11px] rounded-[3px] bg-teal-600" />}
                 </Pressable>
 
                 <View className="flex-1">
                   <Text
                     className={`text-[15px] font-medium ${
-                      item.checked ? 'line-through text-slate-400' : 'text-slate-800'
+                      item.checked ? 'line-through text-stone-400' : 'text-stone-800'
                     }`}
                   >
                     {item.name}
                   </Text>
                   {item.quantity ? (
-                    <Text className="text-xs text-slate-400 mt-0.5">{item.quantity}</Text>
+                    <Text className="text-xs text-stone-400 mt-0.5">{item.quantity}</Text>
                   ) : null}
                 </View>
 
                 <TouchableOpacity className="p-1 mr-1" onPress={() => toggleFavorite(item)}>
-                  <Text className="text-xl" style={{ color: item.favorited ? '#facc15' : '#cbd5e1' }}>
+                  <Text className="text-xl" style={{ color: item.favorited ? '#c2891c' : '#d6d3d1' }}>
                     ★
                   </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity className="p-1" onPress={() => confirmDeleteItem(item.id)}>
-                  <Text className="text-sm text-slate-400">✕</Text>
+                  <Text className="text-sm text-stone-400">✕</Text>
                 </TouchableOpacity>
               </View>
             ))}

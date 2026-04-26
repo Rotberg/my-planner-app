@@ -13,11 +13,12 @@ import {
 import { loadData, saveData } from '../utils/storage';
 
 const STORAGE_KEY = 'tasks';
+const TIME_FORMAT_KEY = 'tasks:timeFormat24h';
 
 const PRIORITY_OPTIONS = [
-  { label: 'Low', value: 'low', color: '#22c55e' },
-  { label: 'Medium', value: 'medium', color: '#f59e0b' },
-  { label: 'High', value: 'high', color: '#ef4444' },
+  { label: 'Low', value: 'low', color: '#84a98c' },
+  { label: 'Medium', value: 'medium', color: '#d4a017' },
+  { label: 'High', value: 'high', color: '#c44569' },
 ];
 
 const RECURRENCE_OPTIONS = [
@@ -30,14 +31,9 @@ const RECURRENCE_OPTIONS = [
 const PRESET_TAGS = ['Daily', 'Health', 'Work', 'Personal', 'Appointment', 'Exercise'];
 
 const TAG_PALETTE = [
-  { bg: '#ede9fe', border: '#c4b5fd', text: '#7c3aed' },
-  { bg: '#dcfce7', border: '#86efac', text: '#16a34a' },
-  { bg: '#fef3c7', border: '#fcd34d', text: '#d97706' },
-  { bg: '#fee2e2', border: '#fca5a5', text: '#dc2626' },
-  { bg: '#e0f2fe', border: '#7dd3fc', text: '#0284c7' },
-  { bg: '#fce7f3', border: '#f9a8d4', text: '#be185d' },
-  { bg: '#fff7ed', border: '#fdba74', text: '#ea580c' },
-  { bg: '#f0fdf4', border: '#6ee7b7', text: '#065f46' },
+  { bg: '#eef0eb', border: '#cdd5c2', text: '#5a6a4a' },
+  { bg: '#f5ebd4', border: '#e6d29a', text: '#8a6914' },
+  { bg: '#f1d9d9', border: '#dcb0b0', text: '#8b3737' },
 ];
 
 function getTagColor(tag) {
@@ -57,12 +53,16 @@ function formatDate(isoString) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function formatTime(hhmm) {
+function formatTime(hhmm, is24Hour = false) {
   if (!hhmm) return '';
   const [h, m] = hhmm.split(':').map(Number);
+  const mm = String(m).padStart(2, '0');
+  if (is24Hour) {
+    return `${String(h).padStart(2, '0')}:${mm}`;
+  }
   const period = h >= 12 ? 'PM' : 'AM';
   const hour = h % 12 === 0 ? 12 : h % 12;
-  return `${hour}:${String(m).padStart(2, '0')} ${period}`;
+  return `${hour}:${mm} ${period}`;
 }
 
 function getNextDueDate(isoString, recurrence) {
@@ -87,12 +87,22 @@ export default function TasksScreen() {
   const [recurrence, setRecurrence] = useState('none');
   const [selectedTags, setSelectedTags] = useState([]);
   const [customTagInput, setCustomTagInput] = useState('');
+  const [is24Hour, setIs24Hour] = useState(false);
 
   useEffect(() => {
     loadData(STORAGE_KEY).then((stored) => {
       if (stored) setTasks(stored);
     });
+    loadData(TIME_FORMAT_KEY).then((stored) => {
+      if (typeof stored === 'boolean') setIs24Hour(stored);
+    });
   }, []);
+
+  function toggleTimeFormat() {
+    const next = !is24Hour;
+    setIs24Hour(next);
+    saveData(TIME_FORMAT_KEY, next);
+  }
 
   async function persist(updated) {
     setTasks(updated);
@@ -184,18 +194,18 @@ export default function TasksScreen() {
         <View className="flex-row items-start">
           {/* Checkbox */}
           <TouchableOpacity
-            className="w-[22px] h-[22px] rounded-[6px] border-2 border-indigo-500 mr-3 items-center justify-center"
+            className="w-[22px] h-[22px] rounded-[6px] border-2 border-teal-600 mr-3 items-center justify-center"
             style={{ marginTop: 2 }}
             onPress={() => toggleDone(item.id)}
           >
-            {item.done && <View className="w-[11px] h-[11px] rounded-[3px] bg-indigo-500" />}
+            {item.done && <View className="w-[11px] h-[11px] rounded-[3px] bg-teal-600" />}
           </TouchableOpacity>
 
           {/* Content */}
           <View className="flex-1">
             <Text
               className={`text-[15px] font-medium ${
-                item.done ? 'line-through text-slate-400' : 'text-slate-800'
+                item.done ? 'line-through text-stone-400' : 'text-stone-800'
               }`}
             >
               {item.title}
@@ -203,13 +213,13 @@ export default function TasksScreen() {
 
             {/* Date / time / recurrence row */}
             <View className="flex-row flex-wrap items-center mt-0.5" style={{ gap: 6 }}>
-              <Text className="text-xs text-slate-400">{formatDate(item.dueDate)}</Text>
+              <Text className="text-xs text-stone-400">{formatDate(item.dueDate)}</Text>
               {item.dueTime ? (
-                <Text className="text-xs text-slate-400">· {formatTime(item.dueTime)}</Text>
+                <Text className="text-xs text-stone-400">· {formatTime(item.dueTime, is24Hour)}</Text>
               ) : null}
               {rec !== 'none' && (
-                <View className="flex-row items-center bg-indigo-50 rounded-full px-2 py-0.5 border border-indigo-100">
-                  <Text className="text-[10px] text-indigo-500 font-semibold">
+                <View className="flex-row items-center bg-teal-50 rounded-full px-2 py-0.5 border border-teal-100">
+                  <Text className="text-[10px] text-teal-700 font-semibold">
                     🔄 {rec.charAt(0).toUpperCase() + rec.slice(1)}
                   </Text>
                 </View>
@@ -249,7 +259,7 @@ export default function TasksScreen() {
 
           {/* Delete */}
           <TouchableOpacity className="p-1 self-start" onPress={() => confirmDelete(item.id)}>
-            <Text className="text-sm text-slate-400">✕</Text>
+            <Text className="text-sm text-stone-400">✕</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -257,16 +267,16 @@ export default function TasksScreen() {
   }
 
   return (
-    <View className="flex-1 bg-slate-50">
+    <View className="flex-1 bg-[#faf8f3]">
       {/* ── Input card ── */}
       <View className="m-4 p-4 bg-white rounded-xl shadow">
-        <Text className="text-lg font-bold text-slate-800 mb-3">Add Task</Text>
+        <Text className="text-lg font-bold text-stone-800 mb-3">Add Task</Text>
 
         {/* Title */}
         <TextInput
-          className="border border-slate-200 rounded-lg px-3 py-2.5 text-[15px] text-slate-800 mb-3"
+          className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
           placeholder="Task title…"
-          placeholderTextColor="#94a3b8"
+          placeholderTextColor="#a8a29e"
           value={title}
           onChangeText={setTitle}
           returnKeyType="done"
@@ -288,7 +298,7 @@ export default function TasksScreen() {
                 onPress={() => setPriority(opt.value)}
               >
                 <Text
-                  className={`text-[13px] font-semibold ${selected ? 'text-white' : 'text-gray-700'}`}
+                  className={`text-[13px] font-semibold ${selected ? 'text-white' : 'text-stone-700'}`}
                 >
                   {opt.label}
                 </Text>
@@ -299,10 +309,10 @@ export default function TasksScreen() {
 
         {/* Due date */}
         <TouchableOpacity
-          className="border border-slate-200 rounded-lg px-3 py-2.5 mb-3"
+          className="border border-stone-200 rounded-lg px-3 py-2.5 mb-3"
           onPress={() => setShowDatePicker(true)}
         >
-          <Text className="text-sm text-slate-600">Due: {formatDate(dueDate.toISOString())}</Text>
+          <Text className="text-sm text-stone-600">Due: {formatDate(dueDate.toISOString())}</Text>
         </TouchableOpacity>
         {showDatePicker && (
           <DateTimePicker
@@ -317,32 +327,52 @@ export default function TasksScreen() {
         )}
 
         {/* Due time */}
-        <TouchableOpacity
-          className="flex-row items-center justify-between border border-slate-200 rounded-lg px-3 py-2.5 mb-3"
-          onPress={() => {
-            setTimePickerDate(dueTime ? new Date(`1970-01-01T${dueTime}:00`) : new Date());
-            setShowTimePicker(true);
-          }}
-        >
-          <Text className="text-sm text-slate-600">
-            {dueTime ? `Time: ${formatTime(dueTime)}` : 'Add time (optional)'}
-          </Text>
-          {dueTime && (
-            <TouchableOpacity
-              onPress={(e) => {
-                e.stopPropagation();
-                setDueTime('');
-              }}
+        <View className="flex-row mb-3" style={{ gap: 8 }}>
+          <TouchableOpacity
+            className="flex-1 flex-row items-center justify-between border border-stone-200 rounded-lg px-3 py-2.5"
+            onPress={() => {
+              setTimePickerDate(dueTime ? new Date(`1970-01-01T${dueTime}:00`) : new Date());
+              setShowTimePicker(true);
+            }}
+          >
+            <Text className="text-sm text-stone-600">
+              {dueTime ? `Time: ${formatTime(dueTime, is24Hour)}` : 'Add time (optional)'}
+            </Text>
+            {dueTime ? (
+              <TouchableOpacity
+                onPress={(e) => {
+                  e.stopPropagation();
+                  setDueTime('');
+                }}
+              >
+                <Text className="text-xs text-rose-600 font-semibold">Clear</Text>
+              </TouchableOpacity>
+            ) : null}
+          </TouchableOpacity>
+          <Pressable
+            className="rounded-lg border-[1.5px] px-3 items-center justify-center"
+            style={
+              is24Hour
+                ? { backgroundColor: '#0d9488', borderColor: '#0d9488' }
+                : { borderColor: '#e7e5e4' }
+            }
+            onPress={toggleTimeFormat}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: is24Hour }}
+            accessibilityLabel="Toggle 24-hour time"
+          >
+            <Text
+              className={`text-[12px] font-semibold ${is24Hour ? 'text-white' : 'text-stone-500'}`}
             >
-              <Text className="text-xs text-red-400 font-semibold">Clear</Text>
-            </TouchableOpacity>
-          )}
-        </TouchableOpacity>
+              24h
+            </Text>
+          </Pressable>
+        </View>
         {showTimePicker && (
           <DateTimePicker
             value={timePickerDate}
             mode="time"
-            is24Hour={false}
+            is24Hour={is24Hour}
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
             onChange={(_, selected) => {
               setShowTimePicker(Platform.OS === 'ios');
@@ -356,7 +386,7 @@ export default function TasksScreen() {
         )}
 
         {/* Recurrence */}
-        <Text className="text-xs font-semibold text-slate-500 mb-1.5">Repeat</Text>
+        <Text className="text-xs font-semibold text-stone-500 mb-1.5">Repeat</Text>
         <View className="flex-row mb-3" style={{ gap: 6 }}>
           {RECURRENCE_OPTIONS.map((opt) => {
             const selected = recurrence === opt.value;
@@ -366,13 +396,13 @@ export default function TasksScreen() {
                 className="flex-1 py-2 rounded-lg border-[1.5px] items-center"
                 style={
                   selected
-                    ? { backgroundColor: '#6366f1', borderColor: '#6366f1' }
-                    : { borderColor: '#e2e8f0' }
+                    ? { backgroundColor: '#0d9488', borderColor: '#0d9488' }
+                    : { borderColor: '#e7e5e4' }
                 }
                 onPress={() => setRecurrence(opt.value)}
               >
                 <Text
-                  className={`text-[12px] font-semibold ${selected ? 'text-white' : 'text-slate-500'}`}
+                  className={`text-[12px] font-semibold ${selected ? 'text-white' : 'text-stone-500'}`}
                 >
                   {opt.label}
                 </Text>
@@ -382,7 +412,7 @@ export default function TasksScreen() {
         </View>
 
         {/* Tags */}
-        <Text className="text-xs font-semibold text-slate-500 mb-1.5">Tags</Text>
+        <Text className="text-xs font-semibold text-stone-500 mb-1.5">Tags</Text>
         <View className="flex-row flex-wrap mb-2" style={{ gap: 6 }}>
           {PRESET_TAGS.map((tag) => {
             const isSelected = selectedTags.includes(tag);
@@ -394,13 +424,13 @@ export default function TasksScreen() {
                 style={
                   isSelected
                     ? { backgroundColor: c.bg, borderColor: c.border }
-                    : { borderColor: '#e2e8f0' }
+                    : { borderColor: '#e7e5e4' }
                 }
                 onPress={() => toggleTag(tag)}
               >
                 <Text
                   className="text-xs font-medium"
-                  style={isSelected ? { color: c.text } : { color: '#94a3b8' }}
+                  style={isSelected ? { color: c.text } : { color: '#a8a29e' }}
                 >
                   {tag}
                 </Text>
@@ -411,16 +441,16 @@ export default function TasksScreen() {
 
         <View className="flex-row mb-2" style={{ gap: 8 }}>
           <TextInput
-            className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800"
+            className="flex-1 border border-stone-200 rounded-lg px-3 py-2 text-sm text-stone-800"
             placeholder="Custom tag…"
-            placeholderTextColor="#94a3b8"
+            placeholderTextColor="#a8a29e"
             value={customTagInput}
             onChangeText={setCustomTagInput}
             returnKeyType="done"
             onSubmitEditing={addCustomTag}
           />
           <TouchableOpacity
-            className="bg-slate-400 rounded-lg px-3 py-2 items-center justify-center"
+            className="bg-stone-400 rounded-lg px-3 py-2 items-center justify-center"
             onPress={addCustomTag}
           >
             <Text className="text-white text-sm font-bold">Add</Text>
@@ -450,7 +480,7 @@ export default function TasksScreen() {
         )}
 
         <TouchableOpacity
-          className="bg-indigo-500 rounded-lg py-3 items-center"
+          className="bg-teal-600 rounded-lg py-3 items-center"
           onPress={addTask}
         >
           <Text className="text-white text-[15px] font-bold">Add Task</Text>
@@ -464,7 +494,7 @@ export default function TasksScreen() {
         renderItem={renderTask}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}
         ListEmptyComponent={
-          <Text className="text-center text-slate-400 mt-8 text-sm">
+          <Text className="text-center text-stone-400 mt-8 text-sm">
             No tasks yet. Add one above!
           </Text>
         }

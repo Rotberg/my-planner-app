@@ -18,6 +18,9 @@ const MAPPING = {
   'paperplane.fill': 'send',
   'chevron.left.forwardslash.chevron.right': 'code',
   'chevron.right': 'chevron-right',
+  'checkmark.circle.fill': 'task-alt',
+  'calendar': 'calendar-today',
+  'cart.fill': 'shopping-cart',
 } as IconMapping;
 
 /**
