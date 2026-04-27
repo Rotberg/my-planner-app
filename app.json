@@ -53,6 +53,12 @@
         "projectId": "aea601e5-4659-465a-967b-2b14ad91614a"
       }
     },
-    "owner": "baronart"
+    "owner": "baronart",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/aea601e5-4659-465a-967b-2b14ad91614a"
+    }
   }
 }
