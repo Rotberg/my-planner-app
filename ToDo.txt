@@ -1,20 +1,14 @@
 To do -
 
     General -
-        - Add spacing at the top the the pages. Especially on shopping page the currentl list / saved list at the top is being cut off at the top with the phone ux i,e current battery
-        - Need to add in the ability to handle users. So a user can log on and see their shopping lists and tasks
 
     Shopping List -
-        - Bug - when the user adds in the quantity and then goes to click on the add to list, instead of adding to list it puts the keyboard away, so they have to click it twice. Can you suggest a way of fixing this?
-        - Can you add in Zod add use it to validate the text fields i.e quanitity has to be number
-        - Add in catagories to the shopping items similier to tesco i.e "Fresh Food", "Frozen Food", "Bakery", "Drinks", "House Hold". Can  you then apply these catagories in the item list below to sort the shopping list. These should be collaspable with the total item count visable in each catagory i.e ⌄ Frozen Food 5
-        - Instead of asking for the user to name the list when saving it should just use the save date as the identifier for the user. So the only option that the user can enter would be the delivery date.
-        - Ability to edit items in the list
 
     Task -
-        - Bug the time seems to be an hour out, I select 1300 and it will show 1200 in the field
 
     Planner -
-        - How easy is it the sync this with Google calender? i.e import google calender into planner
+
+    Health -
 
 
+ 

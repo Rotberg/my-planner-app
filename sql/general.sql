@@ -58,6 +58,26 @@ create table if not exists health_stats (
   created_at timestamptz not null default now()
 );
 
+-- ─── Health: completed workout sessions (history) ────────────────────────────
+create table if not exists workout_sessions (
+  id uuid primary key default gen_random_uuid(),
+  name text,
+  performed_at date not null default current_date,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists workout_session_exercises (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references workout_sessions(id) on delete cascade,
+  name text not null,
+  sets text,
+  reps text,
+  weight text,
+  notes text,
+  position int not null default 0
+);
+
 -- ─── Health: saved workout routine snapshots ─────────────────────────────────
 create table if not exists workout_routines (
   id uuid primary key default gen_random_uuid(),

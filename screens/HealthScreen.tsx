@@ -17,6 +17,7 @@ import { loadData, saveData } from '../utils/storage';
 import { supabase } from '../utils/supabase';
 
 const STORAGE_KEY = 'health_workout_current';
+const HEIGHT_STORAGE_KEY = 'health_user_height_cm';
 
 // ─── Stats ──────────────────────────────────────────────────────────────────
 const MEASUREMENT_FIELDS = [
@@ -64,6 +65,25 @@ const StatsFormSchema = z
     (v) => Object.values(v).some((s) => s !== ''),
     { message: 'Enter at least one measurement.' }
   );
+
+const HeightSchema = z
+  .string()
+  .trim()
+  .refine((v) => /^\d+(\.\d+)?$/.test(v), { message: 'Must be a number (e.g. 175 or 175.5).' })
+  .refine((v) => Number(v) > 0 && Number(v) < 300, { message: 'Enter height in cm.' });
+
+// BMI = weight (kg) / height (m)^2
+function calcBMI(weightKg: number, heightCm: number) {
+  const m = heightCm / 100;
+  return weightKg / (m * m);
+}
+
+function bmiCategory(b: number) {
+  if (b < 18.5) return 'Underweight';
+  if (b < 25) return 'Normal';
+  if (b < 30) return 'Overweight';
+  return 'Obese';
+}
 
 // ─── Workout ────────────────────────────────────────────────────────────────
 type Exercise = {
@@ -135,6 +155,12 @@ export default function HealthScreen() {
   const [statHistory, setStatHistory] = useState<HealthStat[]>([]);
   const [expandedStatId, setExpandedStatId] = useState<string | null>(null);
 
+  // User-level height (for BMI). Stored once in AsyncStorage rather than
+  // logged with every entry — height rarely changes.
+  const [userHeight, setUserHeight] = useState<number | null>(null);
+  const [heightInput, setHeightInput] = useState('');
+  const [editingHeight, setEditingHeight] = useState(false);
+
   // ─── Workout state ────────────────────────────────────────────────────────
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [exName, setExName] = useState('');
@@ -159,6 +185,12 @@ export default function HealthScreen() {
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [routineName, setRoutineName] = useState('');
 
+  // Save-workout (completed session) modal
+  const [showSessionModal, setShowSessionModal] = useState(false);
+  const [sessionName, setSessionName] = useState('');
+  const [sessionDate, setSessionDate] = useState<Date>(new Date());
+  const [showSessionDatePicker, setShowSessionDatePicker] = useState(false);
+
   // ─── Saved routines state ────────────────────────────────────────────────
   const [savedRoutines, setSavedRoutines] = useState<SavedRoutine[]>([]);
   const [expandedRoutineId, setExpandedRoutineId] = useState<string | null>(null);
@@ -168,8 +200,24 @@ export default function HealthScreen() {
     loadData(STORAGE_KEY).then((stored) => {
       if (stored) setExercises(stored);
     });
+    loadData(HEIGHT_STORAGE_KEY).then((stored) => {
+      if (typeof stored === 'number' && stored > 0) setUserHeight(stored);
+    });
     fetchExerciseCatalog();
   }, []);
+
+  async function saveHeight() {
+    const parsed = HeightSchema.safeParse(heightInput);
+    if (!parsed.success) {
+      Alert.alert('Invalid height', parsed.error.issues[0]?.message ?? 'Please check the value.');
+      return;
+    }
+    const value = Number(parsed.data);
+    setUserHeight(value);
+    setEditingHeight(false);
+    setHeightInput('');
+    await saveData(HEIGHT_STORAGE_KEY, value);
+  }
 
   useEffect(() => {
     if (view === 'stats') fetchStatHistory();
@@ -402,6 +450,56 @@ export default function HealthScreen() {
     Alert.alert('Saved!', `"${parsed.data}" has been saved.`);
   }
 
+  // ─── Save current workout as a completed session (history) ───────────────
+  async function saveCurrentSession() {
+    if (exercises.length === 0) {
+      Alert.alert('Empty workout', 'Add some exercises before saving.');
+      return;
+    }
+
+    const name = sessionName.trim() || null;
+
+    const { data: session, error } = await supabase
+      .from('workout_sessions')
+      .insert({
+        name,
+        performed_at: sessionDate.toISOString().split('T')[0],
+      })
+      .select()
+      .single();
+
+    if (error || !session) {
+      Alert.alert('Error', 'Could not save workout. Check your connection.');
+      return;
+    }
+
+    await supabase.from('workout_session_exercises').insert(
+      exercises.map((e, idx) => ({
+        session_id: session.id,
+        name: e.name,
+        sets: e.sets || null,
+        reps: e.reps || null,
+        weight: e.weight || null,
+        notes: e.notes || null,
+        position: idx,
+      }))
+    );
+
+    setShowSessionModal(false);
+    setSessionName('');
+    setSessionDate(new Date());
+    Alert.alert(
+      'Workout saved',
+      'View it in the planner on the date you logged it.',
+      [
+        {
+          text: 'OK',
+          onPress: () => persistWorkout([]),
+        },
+      ]
+    );
+  }
+
   // ─── Catalog management ──────────────────────────────────────────────────
   async function addToCatalog() {
     const parsed = CatalogNameSchema.safeParse(newCatalogName);
@@ -500,9 +598,65 @@ export default function HealthScreen() {
           contentContainerStyle={{ paddingBottom: 32 }}
           keyboardShouldPersistTaps="handled"
         >
+          {/* ── Height (one-time) ── */}
+          {(userHeight === null || editingHeight) && (
+            <View className="mx-4 mb-3 p-4 bg-white rounded-xl shadow">
+              <Text className="text-sm font-bold text-stone-700 mb-1">Your Height</Text>
+              <Text className="text-xs text-stone-400 mb-3">
+                Set this once so we can calculate your BMI from your weight entries.
+              </Text>
+              <View className="flex-row" style={{ gap: 8 }}>
+                <TextInput
+                  className="flex-1 border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800"
+                  placeholder="e.g. 175"
+                  placeholderTextColor="#a8a29e"
+                  value={heightInput}
+                  onChangeText={setHeightInput}
+                  keyboardType="decimal-pad"
+                  returnKeyType="done"
+                  onSubmitEditing={saveHeight}
+                />
+                <View className="px-3 justify-center">
+                  <Text className="text-sm text-stone-400">cm</Text>
+                </View>
+                <TouchableOpacity
+                  className="bg-teal-600 rounded-lg px-4 items-center justify-center"
+                  onPress={saveHeight}
+                >
+                  <Text className="text-white text-sm font-bold">Save</Text>
+                </TouchableOpacity>
+                {editingHeight && (
+                  <TouchableOpacity
+                    className="border-[1.5px] border-stone-200 rounded-lg px-3 items-center justify-center"
+                    onPress={() => {
+                      setEditingHeight(false);
+                      setHeightInput('');
+                    }}
+                  >
+                    <Text className="text-sm text-stone-500 font-semibold">Cancel</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          )}
+
           {/* ── Add entry card ── */}
           <View className="mx-4 mb-3 p-4 bg-white rounded-xl shadow">
-            <Text className="text-lg font-bold text-stone-800 mb-3">Log Entry</Text>
+            <View className="flex-row items-center justify-between mb-3">
+              <Text className="text-lg font-bold text-stone-800">Log Entry</Text>
+              {userHeight !== null && !editingHeight && (
+                <TouchableOpacity
+                  onPress={() => {
+                    setHeightInput(String(userHeight));
+                    setEditingHeight(true);
+                  }}
+                >
+                  <Text className="text-xs text-teal-700 font-semibold">
+                    Height: {userHeight} cm · Edit
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
 
             <TouchableOpacity
               className="border border-stone-200 rounded-lg px-3 py-2.5 mb-3"
@@ -607,6 +761,18 @@ export default function HealthScreen() {
                           </View>
                         ) : null
                       ))}
+                      {(() => {
+                        if (!s.weight || !userHeight) return null;
+                        const b = calcBMI(s.weight, userHeight);
+                        return (
+                          <View className="flex-row justify-between py-1 mt-1 pt-2 border-t border-stone-100">
+                            <Text className="text-sm text-stone-500">BMI</Text>
+                            <Text className="text-sm font-semibold text-teal-700">
+                              {b.toFixed(1)} · {bmiCategory(b)}
+                            </Text>
+                          </View>
+                        );
+                      })()}
                       {s.notes ? (
                         <View className="mt-2 pt-2 border-t border-stone-100">
                           <Text className="text-xs text-stone-400 mb-0.5">Notes</Text>
@@ -812,19 +978,32 @@ export default function HealthScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* ── Save routine ── */}
+        {/* ── Save workout / routine ── */}
         {exercises.length > 0 && (
           <View className="mx-4 mb-3 p-4 bg-white rounded-xl shadow">
-            <Text className="text-sm font-bold text-stone-700 mb-2">Save Routine</Text>
+            <Text className="text-sm font-bold text-stone-700 mb-1">Finish Workout</Text>
             <Text className="text-xs text-stone-400 mb-3">
-              Save this workout as a reusable routine.
+              Log this as a completed session (shows in planner) or save as a
+              reusable routine for next time.
             </Text>
-            <TouchableOpacity
-              className="bg-teal-600 rounded-lg py-2.5 items-center"
-              onPress={() => setShowSaveModal(true)}
-            >
-              <Text className="text-white text-sm font-bold">Save as Routine</Text>
-            </TouchableOpacity>
+            <View className="flex-row" style={{ gap: 8 }}>
+              <TouchableOpacity
+                className="flex-1 bg-teal-600 rounded-lg py-2.5 items-center"
+                onPress={() => {
+                  setSessionDate(new Date());
+                  setSessionName('');
+                  setShowSessionModal(true);
+                }}
+              >
+                <Text className="text-white text-sm font-bold">Save Workout</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                className="flex-1 border-[1.5px] border-teal-600 rounded-lg py-2.5 items-center"
+                onPress={() => setShowSaveModal(true)}
+              >
+                <Text className="text-teal-700 text-sm font-bold">Save as Routine</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
@@ -944,6 +1123,70 @@ export default function HealthScreen() {
               <TouchableOpacity
                 className="flex-1 bg-teal-600 rounded-lg py-3 items-center"
                 onPress={saveEditExercise}
+              >
+                <Text className="text-[15px] font-bold text-white">Save</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── Save-workout-session modal ── */}
+      <Modal
+        visible={showSessionModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowSessionModal(false)}
+      >
+        <Pressable
+          className="flex-1 bg-black/40 justify-end"
+          onPress={() => setShowSessionModal(false)}
+        >
+          <Pressable className="bg-white rounded-t-[20px] p-6 pb-10" onPress={() => {}}>
+            <Text className="text-xl font-bold text-stone-800 mb-4">Save Workout</Text>
+
+            <Text className="text-xs font-semibold text-stone-500 mb-1.5">Name (optional)</Text>
+            <TextInput
+              className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
+              placeholder="e.g. Push Day, Legs…"
+              placeholderTextColor="#a8a29e"
+              value={sessionName}
+              onChangeText={setSessionName}
+            />
+
+            <Text className="text-xs font-semibold text-stone-500 mb-1.5">Date</Text>
+            <TouchableOpacity
+              className="border border-stone-200 rounded-lg px-3 py-2.5 mb-4"
+              onPress={() => setShowSessionDatePicker(true)}
+            >
+              <Text className="text-sm text-stone-600">
+                {sessionDate.toLocaleDateString(undefined, {
+                  weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+                })}
+              </Text>
+            </TouchableOpacity>
+            {showSessionDatePicker && (
+              <DateTimePicker
+                value={sessionDate}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                onChange={(_, date) => {
+                  setShowSessionDatePicker(Platform.OS === 'ios');
+                  if (date) setSessionDate(date);
+                }}
+              />
+            )}
+
+            <View className="flex-row" style={{ gap: 12 }}>
+              <TouchableOpacity
+                className="flex-1 border-[1.5px] border-stone-200 rounded-lg py-3 items-center"
+                onPress={() => setShowSessionModal(false)}
+              >
+                <Text className="text-[15px] font-semibold text-stone-500">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                className="flex-1 bg-teal-600 rounded-lg py-3 items-center"
+                onPress={saveCurrentSession}
               >
                 <Text className="text-[15px] font-bold text-white">Save</Text>
               </TouchableOpacity>

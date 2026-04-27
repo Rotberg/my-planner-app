@@ -1,11 +1,12 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
-import React, { useEffect, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
-  FlatList,
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   Text,
   TextInput,
   TouchableOpacity,
@@ -14,8 +15,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { cancelEventNotification, scheduleEventNotification } from '../utils/notifications';
 import { loadData, saveData } from '../utils/storage';
+import { supabase } from '../utils/supabase';
 
 const STORAGE_KEY = 'planner_events';
+const TASKS_KEY = 'tasks';
+const HEIGHT_STORAGE_KEY = 'health_user_height_cm';
 
 type PlannerEvent = {
   id: string;
@@ -25,6 +29,47 @@ type PlannerEvent = {
   notes: string;
   notificationId?: string | null;
 };
+
+type StoredTask = {
+  id: string;
+  title: string;
+  done: boolean;
+  priority: 'low' | 'medium' | 'high';
+  dueDate: string;          // ISO
+  dueTime?: string;         // HH:MM
+  recurrence: 'none' | 'daily' | 'weekly' | 'monthly';
+  tags?: string[];
+};
+
+type WorkoutSession = {
+  id: string;
+  name: string | null;
+  performed_at: string;     // YYYY-MM-DD
+  exercise_count: number;
+};
+
+type HealthStatRow = {
+  id: string;
+  recorded_at: string;      // YYYY-MM-DD
+  weight: number | null;
+  waist: number | null;
+  chest: number | null;
+  hips: number | null;
+  arms: number | null;
+  thighs: number | null;
+  notes: string | null;
+};
+
+type FilterKey = 'all' | 'events' | 'oneoff' | 'routine' | 'workouts' | 'health';
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'all',      label: 'All' },
+  { key: 'events',   label: 'Events' },
+  { key: 'oneoff',   label: 'One-off' },
+  { key: 'routine',  label: 'Routine' },
+  { key: 'workouts', label: 'Workouts' },
+  { key: 'health',   label: 'Health' },
+];
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -65,6 +110,24 @@ function buildMonthGrid(year: number, month: number): Date[] {
   });
 }
 
+function bmi(weightKg: number, heightCm: number) {
+  const m = heightCm / 100;
+  return weightKg / (m * m);
+}
+
+function bmiCategory(b: number) {
+  if (b < 18.5) return 'Underweight';
+  if (b < 25) return 'Normal';
+  if (b < 30) return 'Overweight';
+  return 'Obese';
+}
+
+const PRIORITY_COLORS: Record<StoredTask['priority'], string> = {
+  low: '#84a98c',
+  medium: '#d4a017',
+  high: '#c44569',
+};
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function PlannerScreen() {
@@ -74,7 +137,13 @@ export default function PlannerScreen() {
   const [displayYear, setDisplayYear] = useState(today.getFullYear());
   const [displayMonth, setDisplayMonth] = useState(today.getMonth());
   const [selectedDate, setSelectedDate] = useState(todayYMD);
+  const [filter, setFilter] = useState<FilterKey>('all');
+
   const [events, setEvents] = useState<PlannerEvent[]>([]);
+  const [tasks, setTasks] = useState<StoredTask[]>([]);
+  const [sessions, setSessions] = useState<WorkoutSession[]>([]);
+  const [healthStats, setHealthStats] = useState<HealthStatRow[]>([]);
+  const [userHeight, setUserHeight] = useState<number | null>(null);
 
   // Modal state
   const [modalVisible, setModalVisible] = useState(false);
@@ -83,11 +152,53 @@ export default function PlannerScreen() {
   const [eventTime, setEventTime] = useState(new Date());
   const [showTimePicker, setShowTimePicker] = useState(false);
 
+  // ── Load on mount ──────────────────────────────────────────────────────────
   useEffect(() => {
     loadData(STORAGE_KEY).then((stored) => {
       if (stored) setEvents(stored);
     });
   }, []);
+
+  // Refresh tasks + remote data each time the planner is focused, so changes
+  // made in other tabs (or in the Health screen) show up here.
+  useFocusEffect(
+    useCallback(() => {
+      loadData(TASKS_KEY).then((stored) => {
+        if (stored) setTasks(stored);
+      });
+      loadData(HEIGHT_STORAGE_KEY).then((stored) => {
+        if (typeof stored === 'number' && stored > 0) setUserHeight(stored);
+        else setUserHeight(null);
+      });
+      fetchSessions();
+      fetchHealthStats();
+    }, [])
+  );
+
+  async function fetchSessions() {
+    const { data } = await supabase
+      .from('workout_sessions')
+      .select('id, name, performed_at, workout_session_exercises(count)')
+      .order('performed_at', { ascending: false });
+    if (data) {
+      setSessions(
+        data.map((s: any) => ({
+          id: s.id,
+          name: s.name,
+          performed_at: s.performed_at,
+          exercise_count: s.workout_session_exercises?.[0]?.count ?? 0,
+        }))
+      );
+    }
+  }
+
+  async function fetchHealthStats() {
+    const { data } = await supabase
+      .from('health_stats')
+      .select('id, recorded_at, weight, waist, chest, hips, arms, thighs, notes')
+      .order('recorded_at', { ascending: false });
+    if (data) setHealthStats(data as HealthStatRow[]);
+  }
 
   async function persist(updated: PlannerEvent[]) {
     setEvents(updated);
@@ -168,18 +279,50 @@ export default function PlannerScreen() {
   // ── Derived ─────────────────────────────────────────────────────────────────
 
   const calendarDays = buildMonthGrid(displayYear, displayMonth);
-  const dayEvents = events.filter((e) => e.date === selectedDate);
+
+  function passesFilter(kind: 'event' | 'oneoff' | 'routine' | 'workout' | 'health') {
+    if (filter === 'all') return true;
+    if (filter === 'events')   return kind === 'event';
+    if (filter === 'oneoff')   return kind === 'oneoff';
+    if (filter === 'routine')  return kind === 'routine';
+    if (filter === 'workouts') return kind === 'workout';
+    if (filter === 'health')   return kind === 'health';
+    return false;
+  }
+
+  function dateHasItems(ymd: string) {
+    if (passesFilter('event')   && events.some((e) => e.date === ymd)) return true;
+    if (passesFilter('oneoff')  && tasks.some((t) => t.recurrence === 'none' && t.dueDate.slice(0, 10) === ymd)) return true;
+    if (passesFilter('routine') && tasks.some((t) => t.recurrence !== 'none' && t.dueDate.slice(0, 10) === ymd)) return true;
+    if (passesFilter('workout') && sessions.some((s) => s.performed_at === ymd)) return true;
+    if (passesFilter('health')  && healthStats.some((s) => s.recorded_at === ymd)) return true;
+    return false;
+  }
+
+  const dayEvents     = passesFilter('event')   ? events.filter((e) => e.date === selectedDate) : [];
+  const dayOneoff     = passesFilter('oneoff')  ? tasks.filter((t) => t.recurrence === 'none' && t.dueDate.slice(0, 10) === selectedDate) : [];
+  const dayRoutine    = passesFilter('routine') ? tasks.filter((t) => t.recurrence !== 'none' && t.dueDate.slice(0, 10) === selectedDate) : [];
+  const daySessions   = passesFilter('workout') ? sessions.filter((s) => s.performed_at === selectedDate) : [];
+  const dayHealth     = passesFilter('health')  ? healthStats.filter((s) => s.recorded_at === selectedDate) : [];
+
+  const dayHasAnything =
+    dayEvents.length + dayOneoff.length + dayRoutine.length + daySessions.length + dayHealth.length > 0;
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
-  function renderEvent({ item }: { item: PlannerEvent }) {
+  function renderEvent(item: PlannerEvent) {
     return (
-      <View className="flex-row items-start bg-white rounded-[10px] p-3 mb-2.5 shadow-sm">
+      <View key={`event-${item.id}`} className="flex-row items-start bg-white rounded-[10px] p-3 mb-2.5 shadow-sm">
         <View className="w-[68px] mr-2.5">
           <Text className="text-xs font-bold text-teal-700">{formatEventTime(item.time)}</Text>
         </View>
         <View className="flex-1">
-          <Text className="text-[15px] font-semibold text-stone-800">{item.title}</Text>
+          <View className="flex-row items-center mb-0.5" style={{ gap: 6 }}>
+            <Text className="text-[15px] font-semibold text-stone-800">{item.title}</Text>
+            <View className="bg-teal-50 border border-teal-100 rounded-full px-2 py-0.5">
+              <Text className="text-[10px] font-semibold text-teal-700">Event</Text>
+            </View>
+          </View>
           {item.notes ? (
             <Text className="text-[13px] text-stone-500 mt-[3px]">{item.notes}</Text>
           ) : null}
@@ -187,6 +330,110 @@ export default function PlannerScreen() {
         <TouchableOpacity className="p-1" onPress={() => confirmDelete(item.id)}>
           <Text className="text-sm text-stone-400">✕</Text>
         </TouchableOpacity>
+      </View>
+    );
+  }
+
+  function renderTask(item: StoredTask) {
+    const isRoutine = item.recurrence !== 'none';
+    const badgeBg = isRoutine ? '#fef3c7' : '#e0f2fe';
+    const badgeBorder = isRoutine ? '#fde68a' : '#bae6fd';
+    const badgeText = isRoutine ? '#a16207' : '#0369a1';
+    return (
+      <View key={`task-${item.id}`} className="flex-row items-start bg-white rounded-[10px] p-3 mb-2.5 shadow-sm">
+        <View className="w-[68px] mr-2.5">
+          <Text className="text-xs font-bold text-stone-500">
+            {item.dueTime ? formatEventTime(item.dueTime) : 'Task'}
+          </Text>
+        </View>
+        <View className="flex-1">
+          <View className="flex-row items-center flex-wrap" style={{ gap: 6 }}>
+            <Text
+              className={`text-[15px] font-semibold ${item.done ? 'line-through text-stone-400' : 'text-stone-800'}`}
+            >
+              {item.title}
+            </Text>
+            <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: badgeBg, borderWidth: 1, borderColor: badgeBorder }}>
+              <Text className="text-[10px] font-semibold" style={{ color: badgeText }}>
+                {isRoutine ? `🔄 ${item.recurrence.charAt(0).toUpperCase() + item.recurrence.slice(1)}` : 'One-off'}
+              </Text>
+            </View>
+            <View className="rounded-[6px] px-[6px] py-[2px]" style={{
+              backgroundColor: PRIORITY_COLORS[item.priority] + '22',
+              borderWidth: 1,
+              borderColor: PRIORITY_COLORS[item.priority],
+            }}>
+              <Text className="text-[10px] font-semibold" style={{ color: PRIORITY_COLORS[item.priority] }}>
+                {item.priority.charAt(0).toUpperCase() + item.priority.slice(1)}
+              </Text>
+            </View>
+          </View>
+          {item.tags && item.tags.length > 0 ? (
+            <Text className="text-[11px] text-stone-400 mt-0.5">{item.tags.join(' · ')}</Text>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
+
+  function renderSession(item: WorkoutSession) {
+    return (
+      <View key={`session-${item.id}`} className="flex-row items-start bg-white rounded-[10px] p-3 mb-2.5 shadow-sm">
+        <View className="w-[68px] mr-2.5">
+          <Text className="text-xs font-bold text-rose-600">Workout</Text>
+        </View>
+        <View className="flex-1">
+          <View className="flex-row items-center" style={{ gap: 6 }}>
+            <Text className="text-[15px] font-semibold text-stone-800">
+              {item.name || 'Workout'}
+            </Text>
+            <View className="bg-rose-50 border border-rose-100 rounded-full px-2 py-0.5">
+              <Text className="text-[10px] font-semibold text-rose-700">💪 Done</Text>
+            </View>
+          </View>
+          <Text className="text-[13px] text-stone-500 mt-[3px]">
+            {item.exercise_count} exercise{item.exercise_count === 1 ? '' : 's'}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  function renderHealth(item: HealthStatRow) {
+    const fields: { label: string; val: number | null; unit: string }[] = [
+      { label: 'Weight', val: item.weight, unit: 'kg' },
+      { label: 'Waist',  val: item.waist,  unit: 'cm' },
+      { label: 'Chest',  val: item.chest,  unit: 'cm' },
+      { label: 'Hips',   val: item.hips,   unit: 'cm' },
+      { label: 'Arms',   val: item.arms,   unit: 'cm' },
+      { label: 'Thighs', val: item.thighs, unit: 'cm' },
+    ];
+    const summary = fields.filter((f) => f.val !== null).map((f) => `${f.label} ${f.val}${f.unit}`).join(' · ');
+    const b = item.weight && userHeight ? bmi(item.weight, userHeight) : null;
+
+    return (
+      <View key={`health-${item.id}`} className="flex-row items-start bg-white rounded-[10px] p-3 mb-2.5 shadow-sm">
+        <View className="w-[68px] mr-2.5">
+          <Text className="text-xs font-bold text-emerald-600">Stats</Text>
+        </View>
+        <View className="flex-1">
+          <View className="flex-row items-center" style={{ gap: 6 }}>
+            <Text className="text-[15px] font-semibold text-stone-800">Body Measurements</Text>
+            {b !== null && (
+              <View className="bg-emerald-50 border border-emerald-100 rounded-full px-2 py-0.5">
+                <Text className="text-[10px] font-semibold text-emerald-700">
+                  BMI {b.toFixed(1)} · {bmiCategory(b)}
+                </Text>
+              </View>
+            )}
+          </View>
+          {summary ? (
+            <Text className="text-[12px] text-stone-500 mt-[3px]">{summary}</Text>
+          ) : null}
+          {item.notes ? (
+            <Text className="text-[12px] text-stone-400 mt-0.5">{item.notes}</Text>
+          ) : null}
+        </View>
       </View>
     );
   }
@@ -231,7 +478,7 @@ export default function PlannerScreen() {
               const isCurrentMonth = day.getMonth() === displayMonth;
               const isToday = ymd === todayYMD;
               const isSelected = ymd === selectedDate;
-              const hasEvents = events.some((e) => e.date === ymd);
+              const hasEvents = dateHasItems(ymd);
 
               return (
                 <TouchableOpacity
@@ -280,6 +527,33 @@ export default function PlannerScreen() {
         ))}
       </View>
 
+      {/* ── Filter chips ── */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 8, gap: 6 }}
+      >
+        {FILTERS.map((f) => {
+          const selected = filter === f.key;
+          return (
+            <TouchableOpacity
+              key={f.key}
+              className="rounded-full px-3 py-1.5 border"
+              style={
+                selected
+                  ? { backgroundColor: '#0d9488', borderColor: '#0d9488' }
+                  : { backgroundColor: '#ffffff', borderColor: '#e7e5e4' }
+              }
+              onPress={() => setFilter(f.key)}
+            >
+              <Text className={`text-[12px] font-semibold ${selected ? 'text-white' : 'text-stone-600'}`}>
+                {f.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
       {/* ── Divider + selected date label ── */}
       <View className="h-px bg-stone-200 mx-4 mb-3" />
       <View className="flex-row items-center justify-between px-4 mb-3">
@@ -295,16 +569,22 @@ export default function PlannerScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* ── Events for selected day ── */}
-      <FlatList
-        data={dayEvents}
-        keyExtractor={(item) => item.id}
-        renderItem={renderEvent}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}
-        ListEmptyComponent={
-          <Text className="text-center text-stone-400 mt-6 text-sm">No events for this day.</Text>
-        }
-      />
+      {/* ── Items for selected day ── */}
+      <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
+        {!dayHasAnything ? (
+          <Text className="text-center text-stone-400 mt-6 text-sm">
+            Nothing for this day.
+          </Text>
+        ) : (
+          <>
+            {dayEvents.map(renderEvent)}
+            {dayOneoff.map(renderTask)}
+            {dayRoutine.map(renderTask)}
+            {daySessions.map(renderSession)}
+            {dayHealth.map(renderHealth)}
+          </>
+        )}
+      </ScrollView>
 
       {/* ── Add event modal ── */}
       <Modal
