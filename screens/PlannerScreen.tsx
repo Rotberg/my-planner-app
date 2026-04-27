@@ -292,16 +292,16 @@ export default function PlannerScreen() {
 
   function dateHasItems(ymd: string) {
     if (passesFilter('event')   && events.some((e) => e.date === ymd)) return true;
-    if (passesFilter('oneoff')  && tasks.some((t) => t.recurrence === 'none' && t.dueDate.slice(0, 10) === ymd)) return true;
-    if (passesFilter('routine') && tasks.some((t) => t.recurrence !== 'none' && t.dueDate.slice(0, 10) === ymd)) return true;
+    if (passesFilter('oneoff')  && tasks.some((t) => t.recurrence === 'none' && toYMD(new Date(t.dueDate)) === ymd)) return true;
+    if (passesFilter('routine') && tasks.some((t) => t.recurrence !== 'none' && toYMD(new Date(t.dueDate)) === ymd)) return true;
     if (passesFilter('workout') && sessions.some((s) => s.performed_at === ymd)) return true;
     if (passesFilter('health')  && healthStats.some((s) => s.recorded_at === ymd)) return true;
     return false;
   }
 
   const dayEvents     = passesFilter('event')   ? events.filter((e) => e.date === selectedDate) : [];
-  const dayOneoff     = passesFilter('oneoff')  ? tasks.filter((t) => t.recurrence === 'none' && t.dueDate.slice(0, 10) === selectedDate) : [];
-  const dayRoutine    = passesFilter('routine') ? tasks.filter((t) => t.recurrence !== 'none' && t.dueDate.slice(0, 10) === selectedDate) : [];
+  const dayOneoff     = passesFilter('oneoff')  ? tasks.filter((t) => t.recurrence === 'none' && toYMD(new Date(t.dueDate)) === selectedDate) : [];
+  const dayRoutine    = passesFilter('routine') ? tasks.filter((t) => t.recurrence !== 'none' && toYMD(new Date(t.dueDate)) === selectedDate) : [];
   const daySessions   = passesFilter('workout') ? sessions.filter((s) => s.performed_at === selectedDate) : [];
   const dayHealth     = passesFilter('health')  ? healthStats.filter((s) => s.recorded_at === selectedDate) : [];
 
