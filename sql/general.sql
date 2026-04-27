@@ -43,3 +43,50 @@ create table if not exists favorite_items (
   name text not null unique,
   created_at timestamptz not null default now()
 );
+
+-- ─── Health: body stats time-series log (metric units: kg / cm) ──────────────
+create table if not exists health_stats (
+  id uuid primary key default gen_random_uuid(),
+  recorded_at date not null default current_date,
+  weight numeric,   -- kg
+  waist  numeric,   -- cm
+  chest  numeric,   -- cm
+  hips   numeric,   -- cm
+  arms   numeric,   -- cm
+  thighs numeric,   -- cm
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+-- ─── Health: saved workout routine snapshots ─────────────────────────────────
+create table if not exists workout_routines (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
+-- ─── Health: exercises belonging to a saved routine ──────────────────────────
+create table if not exists workout_routine_exercises (
+  id uuid primary key default gen_random_uuid(),
+  routine_id uuid not null references workout_routines(id) on delete cascade,
+  name text not null,
+  sets text,
+  reps text,
+  weight text,    -- e.g. "20kg"
+  notes text,
+  position int not null default 0
+);
+
+-- ─── Health: exercise catalog (reusable quick-add templates) ─────────────────
+create table if not exists exercise_catalog (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  created_at timestamptz not null default now()
+);
+
+-- Seed common exercises (skip duplicates)
+insert into exercise_catalog (name) values
+  ('Bench Press'), ('Squat'), ('Deadlift'), ('Overhead Press'), ('Barbell Row'),
+  ('Pull-up'), ('Push-up'), ('Lunge'), ('Bicep Curl'), ('Tricep Extension'),
+  ('Lat Pulldown'), ('Leg Press'), ('Plank'), ('Sit-up'), ('Running')
+on conflict (name) do nothing;

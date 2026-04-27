@@ -21,6 +21,7 @@ const MAPPING = {
   'checkmark.circle.fill': 'task-alt',
   'calendar': 'calendar-today',
   'cart.fill': 'shopping-cart',
+  'dumbbell.fill': 'fitness-center',
 } as IconMapping;
 
 /**
