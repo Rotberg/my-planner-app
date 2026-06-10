@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { z } from 'zod';
 import { loadData, saveData } from '../utils/storage';
 import { supabase } from '../utils/supabase';
+import { useTheme } from '../utils/theme';
 
 const STORAGE_KEY = 'health_workout_current';
 const HEIGHT_STORAGE_KEY = 'health_user_height_cm';
@@ -112,6 +113,15 @@ type SavedRoutineExercise = {
   position: number;
 };
 
+type WorkoutSession = {
+  id: string;
+  name: string | null;
+  performed_at: string;
+  notes: string | null;
+  created_at: string;
+  exercises?: SavedRoutineExercise[];
+};
+
 type CatalogExercise = { id: string; name: string };
 
 const ExerciseFormSchema = z.object({
@@ -143,7 +153,8 @@ function formatShortDate(iso: string) {
 }
 
 export default function HealthScreen() {
-  const [view, setView] = useState<'stats' | 'workout' | 'saved'>('stats');
+  const theme = useTheme();
+  const [view, setView] = useState<'workout' | 'stats'>('workout');
 
   // ─── Stats state ──────────────────────────────────────────────────────────
   const [statForm, setStatForm] = useState<Record<MeasurementKey, string>>({
@@ -194,6 +205,15 @@ export default function HealthScreen() {
   // ─── Saved routines state ────────────────────────────────────────────────
   const [savedRoutines, setSavedRoutines] = useState<SavedRoutine[]>([]);
   const [expandedRoutineId, setExpandedRoutineId] = useState<string | null>(null);
+  const [showRoutinesPicker, setShowRoutinesPicker] = useState(false);
+
+  // ─── Workout session history state ───────────────────────────────────────
+  const [sessionHistory, setSessionHistory] = useState<WorkoutSession[]>([]);
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+
+  // ─── Collapsible-form gates ──────────────────────────────────────────────
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [statFormOpen, setStatFormOpen] = useState(false);
 
   // ─── Load on mount ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -221,7 +241,7 @@ export default function HealthScreen() {
 
   useEffect(() => {
     if (view === 'stats') fetchStatHistory();
-    if (view === 'saved') fetchSavedRoutines();
+    if (view === 'workout') fetchSessionHistory();
   }, [view]);
 
   // ─── Supabase: stats ─────────────────────────────────────────────────────
@@ -258,6 +278,7 @@ export default function HealthScreen() {
     setStatForm({ weight: '', waist: '', chest: '', hips: '', arms: '', thighs: '' });
     setStatNotes('');
     setStatDate(new Date());
+    setStatFormOpen(false);
     fetchStatHistory();
     Alert.alert('Saved!', 'Entry recorded.');
   }
@@ -301,6 +322,41 @@ export default function HealthScreen() {
         prev.map((r) => (r.id === routineId ? { ...r, exercises: data } : r))
       );
     }
+  }
+
+  async function fetchSessionHistory() {
+    const { data } = await supabase
+      .from('workout_sessions')
+      .select('id, name, performed_at, notes, created_at')
+      .order('performed_at', { ascending: false });
+    if (data) setSessionHistory(data as WorkoutSession[]);
+  }
+
+  async function fetchSessionExercises(sessionId: string) {
+    const { data } = await supabase
+      .from('workout_session_exercises')
+      .select('id, name, sets, reps, weight, notes, position')
+      .eq('session_id', sessionId)
+      .order('position', { ascending: true });
+    if (data) {
+      setSessionHistory((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, exercises: data } : s))
+      );
+    }
+  }
+
+  function confirmDeleteSession(id: string) {
+    Alert.alert('Delete workout', 'Permanently delete this workout from history?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          await supabase.from('workout_sessions').delete().eq('id', id);
+          setSessionHistory((prev) => prev.filter((s) => s.id !== id));
+        },
+      },
+    ]);
   }
 
   // ─── Workout helpers (AsyncStorage) ──────────────────────────────────────
@@ -494,7 +550,11 @@ export default function HealthScreen() {
       [
         {
           text: 'OK',
-          onPress: () => persistWorkout([]),
+          onPress: () => {
+            persistWorkout([]);
+            setBuilderOpen(false);
+            fetchSessionHistory();
+          },
         },
       ]
     );
@@ -561,6 +621,8 @@ export default function HealthScreen() {
             }))
           );
           setView('workout');
+          setBuilderOpen(true);
+          setShowRoutinesPicker(false);
         },
       },
     ]);
@@ -569,18 +631,17 @@ export default function HealthScreen() {
   // ─── Shared tab bar ──────────────────────────────────────────────────────
   function TabBar() {
     return (
-      <View className="flex-row mx-4 mt-4 mb-3 bg-stone-200 rounded-xl p-1">
+      <View className="flex-row mx-4 mt-4 mb-3 bg-stone-200 dark:bg-stone-700 rounded-xl p-1">
         {([
+          ['workout', 'Workouts'],
           ['stats',   'Stats'],
-          ['workout', 'Workout'],
-          ['saved',   'Saved'],
         ] as const).map(([key, label]) => (
           <Pressable
             key={key}
-            className={`flex-1 py-2 rounded-lg items-center ${view === key ? 'bg-white shadow-sm' : ''}`}
+            className={`flex-1 py-2 rounded-lg items-center ${view === key ? 'bg-white dark:bg-stone-800 shadow-sm' : ''}`}
             onPress={() => setView(key)}
           >
-            <Text className={`text-sm font-semibold ${view === key ? 'text-teal-700' : 'text-stone-500'}`}>
+            <Text className={`text-sm font-semibold ${view === key ? 'text-teal-700' : 'text-stone-500 dark:text-stone-400'}`}>
               {label}
             </Text>
           </Pressable>
@@ -592,7 +653,7 @@ export default function HealthScreen() {
   // ─── Stats view ──────────────────────────────────────────────────────────
   if (view === 'stats') {
     return (
-      <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#faf8f3' }}>
+      <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: theme.background }}>
         <TabBar />
         <ScrollView
           contentContainerStyle={{ paddingBottom: 32 }}
@@ -600,16 +661,16 @@ export default function HealthScreen() {
         >
           {/* ── Height (one-time) ── */}
           {(userHeight === null || editingHeight) && (
-            <View className="mx-4 mb-3 p-4 bg-white rounded-xl shadow">
-              <Text className="text-sm font-bold text-stone-700 mb-1">Your Height</Text>
-              <Text className="text-xs text-stone-400 mb-3">
+            <View className="mx-4 mb-3 p-4 bg-white dark:bg-stone-800 rounded-xl shadow">
+              <Text className="text-sm font-bold text-stone-700 dark:text-stone-200 mb-1">Your Height</Text>
+              <Text className="text-xs text-stone-400 dark:text-stone-500 mb-3">
                 Set this once so we can calculate your BMI from your weight entries.
               </Text>
               <View className="flex-row" style={{ gap: 8 }}>
                 <TextInput
-                  className="flex-1 border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800"
+                  className="flex-1 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100"
                   placeholder="e.g. 175"
-                  placeholderTextColor="#a8a29e"
+                  placeholderTextColor={theme.placeholder}
                   value={heightInput}
                   onChangeText={setHeightInput}
                   keyboardType="decimal-pad"
@@ -617,7 +678,7 @@ export default function HealthScreen() {
                   onSubmitEditing={saveHeight}
                 />
                 <View className="px-3 justify-center">
-                  <Text className="text-sm text-stone-400">cm</Text>
+                  <Text className="text-sm text-stone-400 dark:text-stone-500">cm</Text>
                 </View>
                 <TouchableOpacity
                   className="bg-teal-600 rounded-lg px-4 items-center justify-center"
@@ -627,42 +688,63 @@ export default function HealthScreen() {
                 </TouchableOpacity>
                 {editingHeight && (
                   <TouchableOpacity
-                    className="border-[1.5px] border-stone-200 rounded-lg px-3 items-center justify-center"
+                    className="border-[1.5px] border-stone-200 dark:border-stone-700 rounded-lg px-3 items-center justify-center"
                     onPress={() => {
                       setEditingHeight(false);
                       setHeightInput('');
                     }}
                   >
-                    <Text className="text-sm text-stone-500 font-semibold">Cancel</Text>
+                    <Text className="text-sm text-stone-500 dark:text-stone-400 font-semibold">Cancel</Text>
                   </TouchableOpacity>
                 )}
               </View>
             </View>
           )}
 
+          {/* ── Log Entry button (collapsed state) ── */}
+          {!statFormOpen && (
+            <View className="flex-row items-center justify-between mx-4 mb-3">
+              <Text className="text-lg font-bold text-stone-800 dark:text-stone-100">
+                History {statHistory.length > 0 ? `(${statHistory.length})` : ''}
+              </Text>
+              <TouchableOpacity
+                className="bg-teal-600 rounded-full px-4 py-2"
+                onPress={() => setStatFormOpen(true)}
+              >
+                <Text className="text-white text-sm font-bold">+ Log Entry</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* ── Add entry card ── */}
-          <View className="mx-4 mb-3 p-4 bg-white rounded-xl shadow">
+          {statFormOpen && (
+          <View className="mx-4 mb-3 p-4 bg-white dark:bg-stone-800 rounded-xl shadow">
             <View className="flex-row items-center justify-between mb-3">
-              <Text className="text-lg font-bold text-stone-800">Log Entry</Text>
-              {userHeight !== null && !editingHeight && (
-                <TouchableOpacity
-                  onPress={() => {
-                    setHeightInput(String(userHeight));
-                    setEditingHeight(true);
-                  }}
-                >
-                  <Text className="text-xs text-teal-700 font-semibold">
-                    Height: {userHeight} cm · Edit
-                  </Text>
+              <Text className="text-lg font-bold text-stone-800 dark:text-stone-100">Log Entry</Text>
+              <View className="flex-row items-center" style={{ gap: 12 }}>
+                {userHeight !== null && !editingHeight && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setHeightInput(String(userHeight));
+                      setEditingHeight(true);
+                    }}
+                  >
+                    <Text className="text-xs text-teal-700 font-semibold">
+                      Height: {userHeight} cm · Edit
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity onPress={() => setStatFormOpen(false)}>
+                  <Text className="text-xs font-semibold text-stone-500 dark:text-stone-400">Cancel</Text>
                 </TouchableOpacity>
-              )}
+              </View>
             </View>
 
             <TouchableOpacity
-              className="border border-stone-200 rounded-lg px-3 py-2.5 mb-3"
+              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 mb-3"
               onPress={() => setShowStatDatePicker(true)}
             >
-              <Text className="text-sm text-stone-600">
+              <Text className="text-sm text-stone-600 dark:text-stone-300">
                 Date: {statDate.toLocaleDateString(undefined, {
                   month: 'short', day: 'numeric', year: 'numeric',
                 })}
@@ -683,24 +765,24 @@ export default function HealthScreen() {
 
             {MEASUREMENT_FIELDS.map((f) => (
               <View key={f.key} className="flex-row items-center mb-3">
-                <Text className="w-20 text-sm font-semibold text-stone-600">{f.label}</Text>
+                <Text className="w-20 text-sm font-semibold text-stone-600 dark:text-stone-300">{f.label}</Text>
                 <TextInput
-                  className="flex-1 border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800"
+                  className="flex-1 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100"
                   placeholder={`e.g. 72.5`}
-                  placeholderTextColor="#a8a29e"
+                  placeholderTextColor={theme.placeholder}
                   value={statForm[f.key]}
                   onChangeText={(v) => setStatForm((prev) => ({ ...prev, [f.key]: v }))}
                   keyboardType="decimal-pad"
                   returnKeyType="done"
                 />
-                <Text className="w-10 text-right text-xs text-stone-400 ml-2">{f.unit}</Text>
+                <Text className="w-10 text-right text-xs text-stone-400 dark:text-stone-500 ml-2">{f.unit}</Text>
               </View>
             ))}
 
             <TextInput
-              className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
+              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100 mb-3"
               placeholder="Notes (optional)…"
-              placeholderTextColor="#a8a29e"
+              placeholderTextColor={theme.placeholder}
               value={statNotes}
               onChangeText={setStatNotes}
               multiline
@@ -713,15 +795,12 @@ export default function HealthScreen() {
               <Text className="text-white text-[15px] font-bold">Save Entry</Text>
             </TouchableOpacity>
           </View>
+          )}
 
           {/* ── History ── */}
-          <Text className="text-[13px] font-semibold text-stone-500 px-4 mb-2">
-            History {statHistory.length > 0 ? `(${statHistory.length})` : ''}
-          </Text>
-
           {statHistory.length === 0 ? (
-            <Text className="text-center text-stone-400 mt-2 text-sm px-4">
-              No entries yet. Log your first measurement above.
+            <Text className="text-center text-stone-400 dark:text-stone-500 mt-2 text-sm px-4">
+              No entries yet. Tap + Log Entry to record your first measurement.
             </Text>
           ) : (
             statHistory.map((s) => {
@@ -730,32 +809,32 @@ export default function HealthScreen() {
                 .filter((f) => s[f.key] !== null && s[f.key] !== undefined)
                 .map((f) => `${f.label} ${s[f.key]}${f.unit}`);
               return (
-                <View key={s.id} className="mx-4 mb-3 bg-white rounded-xl shadow-sm overflow-hidden">
+                <View key={s.id} className="mx-4 mb-3 bg-white dark:bg-stone-800 rounded-xl shadow-sm overflow-hidden">
                   <TouchableOpacity
                     className="flex-row items-center p-4"
                     onPress={() => setExpandedStatId(isExpanded ? null : s.id)}
                   >
                     <View className="flex-1">
-                      <Text className="text-[15px] font-semibold text-stone-800">
+                      <Text className="text-[15px] font-semibold text-stone-800 dark:text-stone-100">
                         {formatShortDate(s.recorded_at)}
                       </Text>
-                      <Text className="text-xs text-stone-500 mt-0.5" numberOfLines={isExpanded ? 0 : 1}>
+                      <Text className="text-xs text-stone-500 dark:text-stone-400 mt-0.5" numberOfLines={isExpanded ? 0 : 1}>
                         {summaryParts.join(' · ')}
                       </Text>
                     </View>
                     <TouchableOpacity className="p-1.5 mr-2" onPress={() => confirmDeleteStat(s.id)}>
-                      <Text className="text-stone-400 text-[15px]">🗑</Text>
+                      <Text className="text-stone-400 dark:text-stone-500 text-[15px]">🗑</Text>
                     </TouchableOpacity>
-                    <Text className="text-stone-400 text-xs">{isExpanded ? '▲' : '▼'}</Text>
+                    <Text className="text-stone-400 dark:text-stone-500 text-xs">{isExpanded ? '▲' : '▼'}</Text>
                   </TouchableOpacity>
 
                   {isExpanded && (
-                    <View className="border-t border-stone-100 px-4 py-3">
+                    <View className="border-t border-stone-100 dark:border-stone-700 px-4 py-3">
                       {MEASUREMENT_FIELDS.map((f) => (
                         s[f.key] !== null && s[f.key] !== undefined ? (
                           <View key={f.key} className="flex-row justify-between py-1">
-                            <Text className="text-sm text-stone-500">{f.label}</Text>
-                            <Text className="text-sm font-semibold text-stone-700">
+                            <Text className="text-sm text-stone-500 dark:text-stone-400">{f.label}</Text>
+                            <Text className="text-sm font-semibold text-stone-700 dark:text-stone-200">
                               {s[f.key]} {f.unit}
                             </Text>
                           </View>
@@ -765,8 +844,8 @@ export default function HealthScreen() {
                         if (!s.weight || !userHeight) return null;
                         const b = calcBMI(s.weight, userHeight);
                         return (
-                          <View className="flex-row justify-between py-1 mt-1 pt-2 border-t border-stone-100">
-                            <Text className="text-sm text-stone-500">BMI</Text>
+                          <View className="flex-row justify-between py-1 mt-1 pt-2 border-t border-stone-100 dark:border-stone-700">
+                            <Text className="text-sm text-stone-500 dark:text-stone-400">BMI</Text>
                             <Text className="text-sm font-semibold text-teal-700">
                               {b.toFixed(1)} · {bmiCategory(b)}
                             </Text>
@@ -774,9 +853,9 @@ export default function HealthScreen() {
                         );
                       })()}
                       {s.notes ? (
-                        <View className="mt-2 pt-2 border-t border-stone-100">
-                          <Text className="text-xs text-stone-400 mb-0.5">Notes</Text>
-                          <Text className="text-sm text-stone-600">{s.notes}</Text>
+                        <View className="mt-2 pt-2 border-t border-stone-100 dark:border-stone-700">
+                          <Text className="text-xs text-stone-400 dark:text-stone-500 mb-0.5">Notes</Text>
+                          <Text className="text-sm text-stone-600 dark:text-stone-300">{s.notes}</Text>
                         </View>
                       ) : null}
                     </View>
@@ -790,107 +869,130 @@ export default function HealthScreen() {
     );
   }
 
-  // ─── Saved routines view ─────────────────────────────────────────────────
-  if (view === 'saved') {
-    return (
-      <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#faf8f3' }}>
-        <TabBar />
-        <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
-          {savedRoutines.length === 0 ? (
-            <Text className="text-center text-stone-400 mt-8 text-sm">
-              No saved routines yet. Build a workout and save it to see it here.
-            </Text>
-          ) : (
-            savedRoutines.map((routine) => {
-              const isExpanded = expandedRoutineId === routine.id;
-              return (
-                <View key={routine.id} className="bg-white rounded-xl mb-3 shadow-sm overflow-hidden">
-                  <TouchableOpacity
-                    className="flex-row items-center p-4"
-                    onPress={() => {
-                      if (isExpanded) {
-                        setExpandedRoutineId(null);
-                      } else {
-                        setExpandedRoutineId(routine.id);
-                        if (!routine.exercises) fetchRoutineExercises(routine.id);
-                      }
-                    }}
-                  >
-                    <View className="flex-1">
-                      <Text className="text-[15px] font-semibold text-stone-800">
-                        {routine.name}
-                      </Text>
-                      <Text className="text-xs text-stone-400 mt-0.5">
-                        Saved {formatShortDate(routine.created_at.split('T')[0])}
-                      </Text>
-                    </View>
-                    <TouchableOpacity className="p-1.5 mr-2" onPress={() => confirmDeleteRoutine(routine.id)}>
-                      <Text className="text-stone-400 text-[15px]">🗑</Text>
-                    </TouchableOpacity>
-                    <Text className="text-stone-400 text-xs">{isExpanded ? '▲' : '▼'}</Text>
-                  </TouchableOpacity>
-
-                  {isExpanded && (
-                    <View className="border-t border-stone-100 px-4 pb-4">
-                      {routine.exercises === undefined ? (
-                        <Text className="text-stone-400 text-sm py-3">Loading…</Text>
-                      ) : routine.exercises.length === 0 ? (
-                        <Text className="text-stone-400 text-sm py-3">No exercises in this routine.</Text>
-                      ) : (
-                        routine.exercises.map((ex) => (
-                          <View key={ex.id} className="py-2 border-b border-stone-100">
-                            <Text className="text-sm font-semibold text-stone-700">{ex.name}</Text>
-                            <Text className="text-xs text-stone-500 mt-0.5">
-                              {[
-                                ex.sets ? `${ex.sets} sets` : null,
-                                ex.reps ? `${ex.reps} reps` : null,
-                                ex.weight ? ex.weight : null,
-                              ].filter(Boolean).join(' · ') || '—'}
-                            </Text>
-                            {ex.notes ? (
-                              <Text className="text-xs text-stone-400 mt-0.5">{ex.notes}</Text>
-                            ) : null}
-                          </View>
-                        ))
-                      )}
-                      {routine.exercises && routine.exercises.length > 0 && (
-                        <TouchableOpacity
-                          className="mt-3 bg-teal-50 border border-teal-200 rounded-lg py-2.5 items-center"
-                          onPress={() => loadRoutineToCurrent(routine)}
-                        >
-                          <Text className="text-sm font-semibold text-teal-700">Load to Current Workout</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-                </View>
-              );
-            })
-          )}
-        </ScrollView>
-      </SafeAreaView>
-    );
-  }
-
   // ─── Workout view ────────────────────────────────────────────────────────
+  const showBuilder = builderOpen || exercises.length > 0;
   return (
-    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#faf8f3' }}>
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: theme.background }}>
       <TabBar />
       <ScrollView
         contentContainerStyle={{ paddingBottom: 32 }}
         keyboardShouldPersistTaps="handled"
       >
+        {/* ── Workout history (collapsed state) ── */}
+        {!showBuilder && (
+          <>
+            <View className="flex-row items-center justify-between mx-4 mb-3">
+              <Text className="text-lg font-bold text-stone-800 dark:text-stone-100">
+                History {sessionHistory.length > 0 ? `(${sessionHistory.length})` : ''}
+              </Text>
+              <TouchableOpacity
+                className="bg-teal-600 rounded-full px-4 py-2"
+                onPress={() => setBuilderOpen(true)}
+              >
+                <Text className="text-white text-sm font-bold">+ Start Workout</Text>
+              </TouchableOpacity>
+            </View>
+
+            {sessionHistory.length === 0 ? (
+              <Text className="text-center text-stone-400 dark:text-stone-500 mt-2 text-sm px-4">
+                No workouts yet. Tap + Start Workout to begin.
+              </Text>
+            ) : (
+              sessionHistory.map((s) => {
+                const isExpanded = expandedSessionId === s.id;
+                return (
+                  <View key={s.id} className="mx-4 mb-3 bg-white dark:bg-stone-800 rounded-xl shadow-sm overflow-hidden">
+                    <TouchableOpacity
+                      className="flex-row items-center p-4"
+                      onPress={() => {
+                        if (isExpanded) {
+                          setExpandedSessionId(null);
+                        } else {
+                          setExpandedSessionId(s.id);
+                          if (!s.exercises) fetchSessionExercises(s.id);
+                        }
+                      }}
+                    >
+                      <View className="flex-1">
+                        <Text className="text-[15px] font-semibold text-stone-800 dark:text-stone-100">
+                          {s.name || 'Workout'}
+                        </Text>
+                        <Text className="text-xs text-stone-400 dark:text-stone-500 mt-0.5">
+                          {formatShortDate(s.performed_at)}
+                        </Text>
+                      </View>
+                      <TouchableOpacity className="p-1.5 mr-2" onPress={() => confirmDeleteSession(s.id)}>
+                        <Text className="text-stone-400 dark:text-stone-500 text-[15px]">🗑</Text>
+                      </TouchableOpacity>
+                      <Text className="text-stone-400 dark:text-stone-500 text-xs">{isExpanded ? '▲' : '▼'}</Text>
+                    </TouchableOpacity>
+
+                    {isExpanded && (
+                      <View className="border-t border-stone-100 dark:border-stone-700 px-4 pb-4">
+                        {s.exercises === undefined ? (
+                          <Text className="text-stone-400 dark:text-stone-500 text-sm py-3">Loading…</Text>
+                        ) : s.exercises.length === 0 ? (
+                          <Text className="text-stone-400 dark:text-stone-500 text-sm py-3">No exercises in this workout.</Text>
+                        ) : (
+                          s.exercises.map((ex) => (
+                            <View key={ex.id} className="py-2 border-b border-stone-100 dark:border-stone-700">
+                              <Text className="text-sm font-semibold text-stone-700 dark:text-stone-200">{ex.name}</Text>
+                              <Text className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
+                                {[
+                                  ex.sets ? `${ex.sets} sets` : null,
+                                  ex.reps ? `${ex.reps} reps` : null,
+                                  ex.weight ? ex.weight : null,
+                                ].filter(Boolean).join(' · ') || '—'}
+                              </Text>
+                              {ex.notes ? (
+                                <Text className="text-xs text-stone-400 dark:text-stone-500 mt-0.5">{ex.notes}</Text>
+                              ) : null}
+                            </View>
+                          ))
+                        )}
+                      </View>
+                    )}
+                  </View>
+                );
+              })
+            )}
+          </>
+        )}
+
+        {/* ── Builder header (with Cancel + Load Routine) ── */}
+        {showBuilder && (
+          <View className="flex-row items-center justify-between mx-4 mb-3 mt-1">
+            <Text className="text-lg font-bold text-stone-800 dark:text-stone-100">Current Workout</Text>
+            <View className="flex-row items-center" style={{ gap: 14 }}>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowRoutinesPicker(true);
+                  fetchSavedRoutines();
+                }}
+              >
+                <Text className="text-xs font-semibold text-teal-700 dark:text-teal-400">Load Routine</Text>
+              </TouchableOpacity>
+              {exercises.length === 0 && (
+                <TouchableOpacity onPress={() => setBuilderOpen(false)}>
+                  <Text className="text-xs font-semibold text-stone-500 dark:text-stone-400">Cancel</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        )}
+
         {/* ── Add Exercise card ── */}
-        <View className="mx-4 mb-3 p-4 bg-white rounded-xl shadow">
-          <Text className="text-lg font-bold text-stone-800 mb-3">Add Exercise</Text>
+        {showBuilder && (
+        <View className="mx-4 mb-3 p-4 bg-white dark:bg-stone-800 rounded-xl shadow">
+          <Text className="text-lg font-bold text-stone-800 dark:text-stone-100 mb-3">Add Exercise</Text>
 
           {/* Catalog quick-add */}
           <TouchableOpacity
             className="flex-row items-center mb-2"
             onPress={() => setShowCatalog(!showCatalog)}
           >
-            <Text className="text-sm font-semibold text-stone-600 mr-1">From Catalog</Text>
-            <Text className="text-xs text-stone-400">{showCatalog ? '▲' : '▼'}</Text>
+            <Text className="text-sm font-semibold text-stone-600 dark:text-stone-300 mr-1">From Catalog</Text>
+            <Text className="text-xs text-stone-400 dark:text-stone-500">{showCatalog ? '▲' : '▼'}</Text>
           </TouchableOpacity>
 
           {showCatalog && (
@@ -899,19 +1001,19 @@ export default function HealthScreen() {
                 {exerciseCatalog.map((c) => (
                   <TouchableOpacity
                     key={c.id}
-                    className="bg-stone-100 rounded-full px-3 py-1.5 border border-stone-200"
+                    className="bg-stone-100 dark:bg-stone-800 rounded-full px-3 py-1.5 border border-stone-200 dark:border-stone-700"
                     onPress={() => addFromCatalog(c.name)}
                     onLongPress={() => confirmDeleteCatalog(c)}
                   >
-                    <Text className="text-xs text-stone-600 font-medium">+ {c.name}</Text>
+                    <Text className="text-xs text-stone-600 dark:text-stone-300 font-medium">+ {c.name}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
               <View className="flex-row" style={{ gap: 8 }}>
                 <TextInput
-                  className="flex-1 border border-stone-200 rounded-lg px-3 py-2 text-sm text-stone-800"
+                  className="flex-1 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-800 dark:text-stone-100"
                   placeholder="Add exercise to catalog…"
-                  placeholderTextColor="#a8a29e"
+                  placeholderTextColor={theme.placeholder}
                   value={newCatalogName}
                   onChangeText={setNewCatalogName}
                   returnKeyType="done"
@@ -924,14 +1026,14 @@ export default function HealthScreen() {
                   <Text className="text-white text-sm font-bold">Add</Text>
                 </TouchableOpacity>
               </View>
-              <Text className="text-[11px] text-stone-400 mt-1">Long-press a chip to remove it</Text>
+              <Text className="text-[11px] text-stone-400 dark:text-stone-500 mt-1">Long-press a chip to remove it</Text>
             </View>
           )}
 
           <TextInput
-            className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
+            className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100 mb-3"
             placeholder="Exercise name…"
-            placeholderTextColor="#a8a29e"
+            placeholderTextColor={theme.placeholder}
             value={exName}
             onChangeText={setExName}
             returnKeyType="next"
@@ -939,33 +1041,33 @@ export default function HealthScreen() {
 
           <View className="flex-row mb-3" style={{ gap: 8 }}>
             <TextInput
-              className="flex-1 border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800"
+              className="flex-1 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100"
               placeholder="Sets"
-              placeholderTextColor="#a8a29e"
+              placeholderTextColor={theme.placeholder}
               value={exSets}
               onChangeText={setExSets}
               keyboardType="number-pad"
             />
             <TextInput
-              className="flex-1 border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800"
+              className="flex-1 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100"
               placeholder="Reps"
-              placeholderTextColor="#a8a29e"
+              placeholderTextColor={theme.placeholder}
               value={exReps}
               onChangeText={setExReps}
             />
             <TextInput
-              className="flex-1 border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800"
+              className="flex-1 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100"
               placeholder="Weight"
-              placeholderTextColor="#a8a29e"
+              placeholderTextColor={theme.placeholder}
               value={exWeight}
               onChangeText={setExWeight}
             />
           </View>
 
           <TextInput
-            className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
+            className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100 mb-3"
             placeholder="Notes (optional)…"
-            placeholderTextColor="#a8a29e"
+            placeholderTextColor={theme.placeholder}
             value={exNotes}
             onChangeText={setExNotes}
           />
@@ -977,12 +1079,13 @@ export default function HealthScreen() {
             <Text className="text-white text-[15px] font-bold">Add to Workout</Text>
           </TouchableOpacity>
         </View>
+        )}
 
         {/* ── Save workout / routine ── */}
         {exercises.length > 0 && (
-          <View className="mx-4 mb-3 p-4 bg-white rounded-xl shadow">
-            <Text className="text-sm font-bold text-stone-700 mb-1">Finish Workout</Text>
-            <Text className="text-xs text-stone-400 mb-3">
+          <View className="mx-4 mb-3 p-4 bg-white dark:bg-stone-800 rounded-xl shadow">
+            <Text className="text-sm font-bold text-stone-700 dark:text-stone-200 mb-1">Finish Workout</Text>
+            <Text className="text-xs text-stone-400 dark:text-stone-500 mb-3">
               Log this as a completed session (shows in planner) or save as a
               reusable routine for next time.
             </Text>
@@ -1010,7 +1113,7 @@ export default function HealthScreen() {
         {/* ── Workout header ── */}
         {exercises.length > 0 && (
           <View className="flex-row justify-between items-center px-4 mb-2">
-            <Text className="text-[13px] text-stone-500">
+            <Text className="text-[13px] text-stone-500 dark:text-stone-400">
               {exercises.length} exercise{exercises.length !== 1 ? 's' : ''}
             </Text>
             <TouchableOpacity onPress={clearWorkout}>
@@ -1020,22 +1123,22 @@ export default function HealthScreen() {
         )}
 
         {/* ── Exercises list ── */}
-        {exercises.length === 0 ? (
-          <Text className="text-center text-stone-400 mt-6 text-sm px-4">
+        {showBuilder && exercises.length === 0 ? (
+          <Text className="text-center text-stone-400 dark:text-stone-500 mt-6 text-sm px-4">
             Your workout is empty. Add an exercise above!
           </Text>
-        ) : (
+        ) : exercises.length > 0 ? (
           <View className="px-4">
             {exercises.map((ex) => (
               <View
                 key={ex.id}
-                className="bg-white rounded-[10px] p-3 mb-2 shadow-sm"
+                className="bg-white dark:bg-stone-800 rounded-[10px] p-3 mb-2 shadow-sm"
               >
                 <TouchableOpacity onPress={() => openEditExercise(ex)}>
                   <View className="flex-row items-start">
                     <View className="flex-1">
-                      <Text className="text-[15px] font-semibold text-stone-800">{ex.name}</Text>
-                      <Text className="text-xs text-stone-500 mt-0.5">
+                      <Text className="text-[15px] font-semibold text-stone-800 dark:text-stone-100">{ex.name}</Text>
+                      <Text className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
                         {[
                           ex.sets ? `${ex.sets} sets` : null,
                           ex.reps ? `${ex.reps} reps` : null,
@@ -1043,18 +1146,18 @@ export default function HealthScreen() {
                         ].filter(Boolean).join(' · ') || 'Tap to edit'}
                       </Text>
                       {ex.notes ? (
-                        <Text className="text-xs text-stone-400 mt-0.5">{ex.notes}</Text>
+                        <Text className="text-xs text-stone-400 dark:text-stone-500 mt-0.5">{ex.notes}</Text>
                       ) : null}
                     </View>
                     <TouchableOpacity className="p-1" onPress={() => confirmDeleteExercise(ex.id)}>
-                      <Text className="text-sm text-stone-400">✕</Text>
+                      <Text className="text-sm text-stone-400 dark:text-stone-500">✕</Text>
                     </TouchableOpacity>
                   </View>
                 </TouchableOpacity>
               </View>
             ))}
           </View>
-        )}
+        ) : null}
       </ScrollView>
 
       {/* ── Edit-exercise modal ── */}
@@ -1068,13 +1171,13 @@ export default function HealthScreen() {
           className="flex-1 bg-black/40 justify-end"
           onPress={() => setEditingId(null)}
         >
-          <Pressable className="bg-white rounded-t-[20px] p-6 pb-10" onPress={() => {}}>
-            <Text className="text-xl font-bold text-stone-800 mb-4">Edit Exercise</Text>
+          <Pressable className="bg-white dark:bg-stone-800 rounded-t-[20px] p-6 pb-10" onPress={() => {}}>
+            <Text className="text-xl font-bold text-stone-800 dark:text-stone-100 mb-4">Edit Exercise</Text>
 
             <TextInput
-              className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
+              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100 mb-3"
               placeholder="Exercise name…"
-              placeholderTextColor="#a8a29e"
+              placeholderTextColor={theme.placeholder}
               value={editName}
               onChangeText={setEditName}
               autoFocus
@@ -1082,43 +1185,43 @@ export default function HealthScreen() {
 
             <View className="flex-row mb-3" style={{ gap: 8 }}>
               <TextInput
-                className="flex-1 border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800"
+                className="flex-1 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100"
                 placeholder="Sets"
-                placeholderTextColor="#a8a29e"
+                placeholderTextColor={theme.placeholder}
                 value={editSets}
                 onChangeText={setEditSets}
                 keyboardType="number-pad"
               />
               <TextInput
-                className="flex-1 border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800"
+                className="flex-1 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100"
                 placeholder="Reps"
-                placeholderTextColor="#a8a29e"
+                placeholderTextColor={theme.placeholder}
                 value={editReps}
                 onChangeText={setEditReps}
               />
               <TextInput
-                className="flex-1 border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800"
+                className="flex-1 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100"
                 placeholder="Weight"
-                placeholderTextColor="#a8a29e"
+                placeholderTextColor={theme.placeholder}
                 value={editWeight}
                 onChangeText={setEditWeight}
               />
             </View>
 
             <TextInput
-              className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-4"
+              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100 mb-4"
               placeholder="Notes (optional)…"
-              placeholderTextColor="#a8a29e"
+              placeholderTextColor={theme.placeholder}
               value={editNotes}
               onChangeText={setEditNotes}
             />
 
             <View className="flex-row" style={{ gap: 12 }}>
               <TouchableOpacity
-                className="flex-1 border-[1.5px] border-stone-200 rounded-lg py-3 items-center"
+                className="flex-1 border-[1.5px] border-stone-200 dark:border-stone-700 rounded-lg py-3 items-center"
                 onPress={() => setEditingId(null)}
               >
-                <Text className="text-[15px] font-semibold text-stone-500">Cancel</Text>
+                <Text className="text-[15px] font-semibold text-stone-500 dark:text-stone-400">Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 className="flex-1 bg-teal-600 rounded-lg py-3 items-center"
@@ -1142,24 +1245,24 @@ export default function HealthScreen() {
           className="flex-1 bg-black/40 justify-end"
           onPress={() => setShowSessionModal(false)}
         >
-          <Pressable className="bg-white rounded-t-[20px] p-6 pb-10" onPress={() => {}}>
-            <Text className="text-xl font-bold text-stone-800 mb-4">Save Workout</Text>
+          <Pressable className="bg-white dark:bg-stone-800 rounded-t-[20px] p-6 pb-10" onPress={() => {}}>
+            <Text className="text-xl font-bold text-stone-800 dark:text-stone-100 mb-4">Save Workout</Text>
 
-            <Text className="text-xs font-semibold text-stone-500 mb-1.5">Name (optional)</Text>
+            <Text className="text-xs font-semibold text-stone-500 dark:text-stone-400 mb-1.5">Name (optional)</Text>
             <TextInput
-              className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
+              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100 mb-3"
               placeholder="e.g. Push Day, Legs…"
-              placeholderTextColor="#a8a29e"
+              placeholderTextColor={theme.placeholder}
               value={sessionName}
               onChangeText={setSessionName}
             />
 
-            <Text className="text-xs font-semibold text-stone-500 mb-1.5">Date</Text>
+            <Text className="text-xs font-semibold text-stone-500 dark:text-stone-400 mb-1.5">Date</Text>
             <TouchableOpacity
-              className="border border-stone-200 rounded-lg px-3 py-2.5 mb-4"
+              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 mb-4"
               onPress={() => setShowSessionDatePicker(true)}
             >
-              <Text className="text-sm text-stone-600">
+              <Text className="text-sm text-stone-600 dark:text-stone-300">
                 {sessionDate.toLocaleDateString(undefined, {
                   weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
                 })}
@@ -1179,10 +1282,10 @@ export default function HealthScreen() {
 
             <View className="flex-row" style={{ gap: 12 }}>
               <TouchableOpacity
-                className="flex-1 border-[1.5px] border-stone-200 rounded-lg py-3 items-center"
+                className="flex-1 border-[1.5px] border-stone-200 dark:border-stone-700 rounded-lg py-3 items-center"
                 onPress={() => setShowSessionModal(false)}
               >
-                <Text className="text-[15px] font-semibold text-stone-500">Cancel</Text>
+                <Text className="text-[15px] font-semibold text-stone-500 dark:text-stone-400">Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 className="flex-1 bg-teal-600 rounded-lg py-3 items-center"
@@ -1206,13 +1309,13 @@ export default function HealthScreen() {
           className="flex-1 bg-black/40 justify-end"
           onPress={() => setShowSaveModal(false)}
         >
-          <Pressable className="bg-white rounded-t-[20px] p-6 pb-10" onPress={() => {}}>
-            <Text className="text-xl font-bold text-stone-800 mb-4">Save Routine</Text>
-            <Text className="text-xs font-semibold text-stone-500 mb-1.5">Name</Text>
+          <Pressable className="bg-white dark:bg-stone-800 rounded-t-[20px] p-6 pb-10" onPress={() => {}}>
+            <Text className="text-xl font-bold text-stone-800 dark:text-stone-100 mb-4">Save Routine</Text>
+            <Text className="text-xs font-semibold text-stone-500 dark:text-stone-400 mb-1.5">Name</Text>
             <TextInput
-              className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-4"
+              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100 mb-4"
               placeholder="e.g. Upper Body, Push Day…"
-              placeholderTextColor="#a8a29e"
+              placeholderTextColor={theme.placeholder}
               value={routineName}
               onChangeText={setRoutineName}
               autoFocus
@@ -1220,10 +1323,10 @@ export default function HealthScreen() {
 
             <View className="flex-row" style={{ gap: 12 }}>
               <TouchableOpacity
-                className="flex-1 border-[1.5px] border-stone-200 rounded-lg py-3 items-center"
+                className="flex-1 border-[1.5px] border-stone-200 dark:border-stone-700 rounded-lg py-3 items-center"
                 onPress={() => setShowSaveModal(false)}
               >
-                <Text className="text-[15px] font-semibold text-stone-500">Cancel</Text>
+                <Text className="text-[15px] font-semibold text-stone-500 dark:text-stone-400">Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 className="flex-1 bg-teal-600 rounded-lg py-3 items-center"
@@ -1232,6 +1335,102 @@ export default function HealthScreen() {
                 <Text className="text-[15px] font-bold text-white">Save</Text>
               </TouchableOpacity>
             </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── Load Routine picker modal ── */}
+      <Modal
+        visible={showRoutinesPicker}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowRoutinesPicker(false)}
+      >
+        <Pressable
+          className="flex-1 bg-black/40 justify-end"
+          onPress={() => setShowRoutinesPicker(false)}
+        >
+          <Pressable
+            className="bg-white dark:bg-stone-800 rounded-t-[20px] p-6 pb-10"
+            style={{ maxHeight: '80%' }}
+            onPress={() => {}}
+          >
+            <View className="flex-row items-center justify-between mb-4">
+              <Text className="text-xl font-bold text-stone-800 dark:text-stone-100">Load Routine</Text>
+              <TouchableOpacity onPress={() => setShowRoutinesPicker(false)}>
+                <Text className="text-sm font-semibold text-stone-500 dark:text-stone-400">Close</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView>
+              {savedRoutines.length === 0 ? (
+                <Text className="text-center text-stone-400 dark:text-stone-500 mt-4 mb-2 text-sm">
+                  No saved routines yet. Build a workout and tap &quot;Save as Routine&quot; to add one.
+                </Text>
+              ) : (
+                savedRoutines.map((routine) => {
+                  const isExpanded = expandedRoutineId === routine.id;
+                  return (
+                    <View key={routine.id} className="bg-stone-50 dark:bg-stone-900 rounded-xl mb-3 overflow-hidden">
+                      <TouchableOpacity
+                        className="flex-row items-center p-3"
+                        onPress={() => {
+                          if (isExpanded) {
+                            setExpandedRoutineId(null);
+                          } else {
+                            setExpandedRoutineId(routine.id);
+                            if (!routine.exercises) fetchRoutineExercises(routine.id);
+                          }
+                        }}
+                      >
+                        <View className="flex-1">
+                          <Text className="text-[15px] font-semibold text-stone-800 dark:text-stone-100">
+                            {routine.name}
+                          </Text>
+                          <Text className="text-xs text-stone-400 dark:text-stone-500 mt-0.5">
+                            Saved {formatShortDate(routine.created_at.split('T')[0])}
+                          </Text>
+                        </View>
+                        <TouchableOpacity className="p-1.5 mr-2" onPress={() => confirmDeleteRoutine(routine.id)}>
+                          <Text className="text-stone-400 dark:text-stone-500 text-[15px]">🗑</Text>
+                        </TouchableOpacity>
+                        <Text className="text-stone-400 dark:text-stone-500 text-xs">{isExpanded ? '▲' : '▼'}</Text>
+                      </TouchableOpacity>
+
+                      {isExpanded && (
+                        <View className="border-t border-stone-200 dark:border-stone-700 px-3 pb-3">
+                          {routine.exercises === undefined ? (
+                            <Text className="text-stone-400 dark:text-stone-500 text-sm py-3">Loading…</Text>
+                          ) : routine.exercises.length === 0 ? (
+                            <Text className="text-stone-400 dark:text-stone-500 text-sm py-3">No exercises in this routine.</Text>
+                          ) : (
+                            routine.exercises.map((ex) => (
+                              <View key={ex.id} className="py-1.5">
+                                <Text className="text-sm font-semibold text-stone-700 dark:text-stone-200">{ex.name}</Text>
+                                <Text className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
+                                  {[
+                                    ex.sets ? `${ex.sets} sets` : null,
+                                    ex.reps ? `${ex.reps} reps` : null,
+                                    ex.weight ? ex.weight : null,
+                                  ].filter(Boolean).join(' · ') || '—'}
+                                </Text>
+                              </View>
+                            ))
+                          )}
+                          {routine.exercises && routine.exercises.length > 0 && (
+                            <TouchableOpacity
+                              className="mt-3 bg-teal-600 rounded-lg py-2.5 items-center"
+                              onPress={() => loadRoutineToCurrent(routine)}
+                            >
+                              <Text className="text-sm font-bold text-white">Load to Current Workout</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  );
+                })
+              )}
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>

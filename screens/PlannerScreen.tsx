@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { cancelEventNotification, scheduleEventNotification } from '../utils/notifications';
 import { loadData, saveData } from '../utils/storage';
 import { supabase } from '../utils/supabase';
+import { useTheme } from '../utils/theme';
 
 const STORAGE_KEY = 'planner_events';
 const TASKS_KEY = 'tasks';
@@ -62,13 +63,13 @@ type HealthStatRow = {
 
 type FilterKey = 'all' | 'events' | 'oneoff' | 'routine' | 'workouts' | 'health';
 
-const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: 'all',      label: 'All' },
-  { key: 'events',   label: 'Events' },
-  { key: 'oneoff',   label: 'One-off' },
-  { key: 'routine',  label: 'Routine' },
-  { key: 'workouts', label: 'Workouts' },
-  { key: 'health',   label: 'Health' },
+const FILTERS: { key: FilterKey; label: string; color: string }[] = [
+  { key: 'all',      label: 'All',      color: '#0d9488' }, // teal
+  { key: 'events',   label: 'Events',   color: '#6366f1' }, // indigo
+  { key: 'oneoff',   label: 'One-off',  color: '#d4a017' }, // gold
+  { key: 'routine',  label: 'Routine',  color: '#84a98c' }, // sage
+  { key: 'workouts', label: 'Workouts', color: '#c44569' }, // rose
+  { key: 'health',   label: 'Health',   color: '#0ea5e9' }, // sky
 ];
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
@@ -131,6 +132,7 @@ const PRIORITY_COLORS: Record<StoredTask['priority'], string> = {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function PlannerScreen() {
+  const theme = useTheme();
   const today = new Date();
   const todayYMD = toYMD(today);
 
@@ -312,23 +314,23 @@ export default function PlannerScreen() {
 
   function renderEvent(item: PlannerEvent) {
     return (
-      <View key={`event-${item.id}`} className="flex-row items-start bg-white rounded-[10px] p-3 mb-2.5 shadow-sm">
+      <View key={`event-${item.id}`} className="flex-row items-start bg-white dark:bg-stone-800 rounded-[10px] p-3 mb-2.5 shadow-sm">
         <View className="w-[68px] mr-2.5">
           <Text className="text-xs font-bold text-teal-700">{formatEventTime(item.time)}</Text>
         </View>
         <View className="flex-1">
           <View className="flex-row items-center mb-0.5" style={{ gap: 6 }}>
-            <Text className="text-[15px] font-semibold text-stone-800">{item.title}</Text>
+            <Text className="text-[15px] font-semibold text-stone-800 dark:text-stone-100">{item.title}</Text>
             <View className="bg-teal-50 border border-teal-100 rounded-full px-2 py-0.5">
               <Text className="text-[10px] font-semibold text-teal-700">Event</Text>
             </View>
           </View>
           {item.notes ? (
-            <Text className="text-[13px] text-stone-500 mt-[3px]">{item.notes}</Text>
+            <Text className="text-[13px] text-stone-500 dark:text-stone-400 mt-[3px]">{item.notes}</Text>
           ) : null}
         </View>
         <TouchableOpacity className="p-1" onPress={() => confirmDelete(item.id)}>
-          <Text className="text-sm text-stone-400">✕</Text>
+          <Text className="text-sm text-stone-400 dark:text-stone-500">✕</Text>
         </TouchableOpacity>
       </View>
     );
@@ -340,16 +342,16 @@ export default function PlannerScreen() {
     const badgeBorder = isRoutine ? '#fde68a' : '#bae6fd';
     const badgeText = isRoutine ? '#a16207' : '#0369a1';
     return (
-      <View key={`task-${item.id}`} className="flex-row items-start bg-white rounded-[10px] p-3 mb-2.5 shadow-sm">
+      <View key={`task-${item.id}`} className="flex-row items-start bg-white dark:bg-stone-800 rounded-[10px] p-3 mb-2.5 shadow-sm">
         <View className="w-[68px] mr-2.5">
-          <Text className="text-xs font-bold text-stone-500">
+          <Text className="text-xs font-bold text-stone-500 dark:text-stone-400">
             {item.dueTime ? formatEventTime(item.dueTime) : 'Task'}
           </Text>
         </View>
         <View className="flex-1">
           <View className="flex-row items-center flex-wrap" style={{ gap: 6 }}>
             <Text
-              className={`text-[15px] font-semibold ${item.done ? 'line-through text-stone-400' : 'text-stone-800'}`}
+              className={`text-[15px] font-semibold ${item.done ? 'line-through text-stone-400 dark:text-stone-500' : 'text-stone-800 dark:text-stone-100'}`}
             >
               {item.title}
             </Text>
@@ -369,7 +371,7 @@ export default function PlannerScreen() {
             </View>
           </View>
           {item.tags && item.tags.length > 0 ? (
-            <Text className="text-[11px] text-stone-400 mt-0.5">{item.tags.join(' · ')}</Text>
+            <Text className="text-[11px] text-stone-400 dark:text-stone-500 mt-0.5">{item.tags.join(' · ')}</Text>
           ) : null}
         </View>
       </View>
@@ -378,20 +380,20 @@ export default function PlannerScreen() {
 
   function renderSession(item: WorkoutSession) {
     return (
-      <View key={`session-${item.id}`} className="flex-row items-start bg-white rounded-[10px] p-3 mb-2.5 shadow-sm">
+      <View key={`session-${item.id}`} className="flex-row items-start bg-white dark:bg-stone-800 rounded-[10px] p-3 mb-2.5 shadow-sm">
         <View className="w-[68px] mr-2.5">
           <Text className="text-xs font-bold text-rose-600">Workout</Text>
         </View>
         <View className="flex-1">
           <View className="flex-row items-center" style={{ gap: 6 }}>
-            <Text className="text-[15px] font-semibold text-stone-800">
+            <Text className="text-[15px] font-semibold text-stone-800 dark:text-stone-100">
               {item.name || 'Workout'}
             </Text>
             <View className="bg-rose-50 border border-rose-100 rounded-full px-2 py-0.5">
               <Text className="text-[10px] font-semibold text-rose-700">💪 Done</Text>
             </View>
           </View>
-          <Text className="text-[13px] text-stone-500 mt-[3px]">
+          <Text className="text-[13px] text-stone-500 dark:text-stone-400 mt-[3px]">
             {item.exercise_count} exercise{item.exercise_count === 1 ? '' : 's'}
           </Text>
         </View>
@@ -412,13 +414,13 @@ export default function PlannerScreen() {
     const b = item.weight && userHeight ? bmi(item.weight, userHeight) : null;
 
     return (
-      <View key={`health-${item.id}`} className="flex-row items-start bg-white rounded-[10px] p-3 mb-2.5 shadow-sm">
+      <View key={`health-${item.id}`} className="flex-row items-start bg-white dark:bg-stone-800 rounded-[10px] p-3 mb-2.5 shadow-sm">
         <View className="w-[68px] mr-2.5">
           <Text className="text-xs font-bold text-emerald-600">Stats</Text>
         </View>
         <View className="flex-1">
           <View className="flex-row items-center" style={{ gap: 6 }}>
-            <Text className="text-[15px] font-semibold text-stone-800">Body Measurements</Text>
+            <Text className="text-[15px] font-semibold text-stone-800 dark:text-stone-100">Body Measurements</Text>
             {b !== null && (
               <View className="bg-emerald-50 border border-emerald-100 rounded-full px-2 py-0.5">
                 <Text className="text-[10px] font-semibold text-emerald-700">
@@ -428,10 +430,10 @@ export default function PlannerScreen() {
             )}
           </View>
           {summary ? (
-            <Text className="text-[12px] text-stone-500 mt-[3px]">{summary}</Text>
+            <Text className="text-[12px] text-stone-500 dark:text-stone-400 mt-[3px]">{summary}</Text>
           ) : null}
           {item.notes ? (
-            <Text className="text-[12px] text-stone-400 mt-0.5">{item.notes}</Text>
+            <Text className="text-[12px] text-stone-400 dark:text-stone-500 mt-0.5">{item.notes}</Text>
           ) : null}
         </View>
       </View>
@@ -439,7 +441,7 @@ export default function PlannerScreen() {
   }
 
   return (
-    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#faf8f3' }}>
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: theme.background }}>
 
       {/* ── Month navigation header ── */}
       <View className="flex-row items-center justify-between px-4 pt-4 pb-3">
@@ -451,7 +453,7 @@ export default function PlannerScreen() {
           setDisplayMonth(today.getMonth());
           setSelectedDate(todayYMD);
         }}>
-          <Text className="text-base font-bold text-stone-800">
+          <Text className="text-base font-bold text-stone-800 dark:text-stone-100">
             {MONTH_NAMES[displayMonth]} {displayYear}
           </Text>
         </TouchableOpacity>
@@ -464,7 +466,7 @@ export default function PlannerScreen() {
       <View className="flex-row px-3 pb-1">
         {DAY_LABELS.map((label) => (
           <View key={label} className="flex-1 items-center">
-            <Text className="text-[11px] font-semibold text-stone-400">{label}</Text>
+            <Text className="text-[11px] font-semibold text-stone-400 dark:text-stone-500">{label}</Text>
           </View>
         ))}
       </View>
@@ -538,15 +540,18 @@ export default function PlannerScreen() {
           return (
             <TouchableOpacity
               key={f.key}
-              className="rounded-full px-3 py-1.5 border"
+              className="rounded-full px-2.5 py-0.5 border-[1.5px]"
               style={
                 selected
-                  ? { backgroundColor: '#0d9488', borderColor: '#0d9488' }
-                  : { backgroundColor: '#ffffff', borderColor: '#e7e5e4' }
+                  ? { backgroundColor: f.color, borderColor: f.color }
+                  : { backgroundColor: 'transparent', borderColor: f.color }
               }
               onPress={() => setFilter(f.key)}
             >
-              <Text className={`text-[12px] font-semibold ${selected ? 'text-white' : 'text-stone-600'}`}>
+              <Text
+                className="text-[11px] font-semibold"
+                style={{ color: selected ? '#ffffff' : f.color }}
+              >
                 {f.label}
               </Text>
             </TouchableOpacity>
@@ -555,24 +560,42 @@ export default function PlannerScreen() {
       </ScrollView>
 
       {/* ── Divider + selected date label ── */}
-      <View className="h-px bg-stone-200 mx-4 mb-3" />
+      <View className="h-px bg-stone-200 dark:bg-stone-700 mx-4 mb-3" />
       <View className="flex-row items-center justify-between px-4 mb-3">
-        <Text className="text-sm font-semibold text-stone-600">
+        <Text className="text-sm font-semibold text-stone-600 dark:text-stone-300 flex-1" numberOfLines={1}>
           {new Date(selectedDate + 'T00:00:00').toLocaleDateString(undefined, {
             weekday: 'long',
             month: 'long',
             day: 'numeric',
           })}
         </Text>
-        <TouchableOpacity className="bg-teal-600 rounded-lg px-3.5 py-2" onPress={openModal}>
-          <Text className="text-white text-[13px] font-bold">+ Add Event</Text>
-        </TouchableOpacity>
+        <View className="flex-row" style={{ gap: 8 }}>
+          <TouchableOpacity
+            className="rounded-lg px-3 py-2 border-[1.5px] border-teal-600"
+            disabled={selectedDate === todayYMD && displayMonth === today.getMonth() && displayYear === today.getFullYear()}
+            style={
+              selectedDate === todayYMD && displayMonth === today.getMonth() && displayYear === today.getFullYear()
+                ? { opacity: 0.4 }
+                : undefined
+            }
+            onPress={() => {
+              setDisplayYear(today.getFullYear());
+              setDisplayMonth(today.getMonth());
+              setSelectedDate(todayYMD);
+            }}
+          >
+            <Text className="text-teal-700 text-[13px] font-bold">Today</Text>
+          </TouchableOpacity>
+          <TouchableOpacity className="bg-teal-600 rounded-lg px-3.5 py-2" onPress={openModal}>
+            <Text className="text-white text-[13px] font-bold">+ Add Event</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* ── Items for selected day ── */}
       <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
         {!dayHasAnything ? (
-          <Text className="text-center text-stone-400 mt-6 text-sm">
+          <Text className="text-center text-stone-400 dark:text-stone-500 mt-6 text-sm">
             Nothing for this day.
           </Text>
         ) : (
@@ -597,9 +620,9 @@ export default function PlannerScreen() {
           className="flex-1 bg-black/40 justify-end"
           onPress={() => setModalVisible(false)}
         >
-          <Pressable className="bg-white rounded-t-[20px] p-6 pb-10" onPress={() => {}}>
-            <Text className="text-xl font-bold text-stone-800 mb-0.5">New Event</Text>
-            <Text className="text-[13px] text-stone-500 mb-4">
+          <Pressable className="bg-white dark:bg-stone-800 rounded-t-[20px] p-6 pb-10" onPress={() => {}}>
+            <Text className="text-xl font-bold text-stone-800 dark:text-stone-100 mb-0.5">New Event</Text>
+            <Text className="text-[13px] text-stone-500 dark:text-stone-400 mb-4">
               {new Date(selectedDate + 'T00:00:00').toLocaleDateString(undefined, {
                 weekday: 'long',
                 month: 'long',
@@ -608,9 +631,9 @@ export default function PlannerScreen() {
             </Text>
 
             <TextInput
-              className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3"
+              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100 mb-3"
               placeholder="Event title…"
-              placeholderTextColor="#a8a29e"
+              placeholderTextColor={theme.placeholder}
               value={title}
               onChangeText={setTitle}
               returnKeyType="next"
@@ -618,10 +641,10 @@ export default function PlannerScreen() {
             />
 
             <TouchableOpacity
-              className="border border-stone-200 rounded-lg px-3 py-2.5 mb-3"
+              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 mb-3"
               onPress={() => setShowTimePicker(true)}
             >
-              <Text className="text-sm text-stone-600">
+              <Text className="text-sm text-stone-600 dark:text-stone-300">
                 Time: {formatEventTime(toHHMM(eventTime))}
               </Text>
             </TouchableOpacity>
@@ -640,9 +663,9 @@ export default function PlannerScreen() {
             )}
 
             <TextInput
-              className="border border-stone-200 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 mb-3 h-20"
+              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100 mb-3 h-20"
               placeholder="Notes (optional)…"
-              placeholderTextColor="#a8a29e"
+              placeholderTextColor={theme.placeholder}
               value={notes}
               onChangeText={setNotes}
               multiline
@@ -652,10 +675,10 @@ export default function PlannerScreen() {
 
             <View className="flex-row mt-1" style={{ gap: 12 }}>
               <TouchableOpacity
-                className="flex-1 border-[1.5px] border-stone-200 rounded-lg py-3 items-center"
+                className="flex-1 border-[1.5px] border-stone-200 dark:border-stone-700 rounded-lg py-3 items-center"
                 onPress={() => setModalVisible(false)}
               >
-                <Text className="text-[15px] font-semibold text-stone-500">Cancel</Text>
+                <Text className="text-[15px] font-semibold text-stone-500 dark:text-stone-400">Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 className="flex-1 bg-teal-600 rounded-lg py-3 items-center"
