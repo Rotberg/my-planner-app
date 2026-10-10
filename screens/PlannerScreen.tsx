@@ -1,46 +1,29 @@
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFocusEffect } from '@react-navigation/native';
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  Alert,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { Alert, ScrollView, Text, TouchableOpacity, View, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { cancelEventNotification, scheduleEventNotification } from '../utils/notifications';
+import TaskForm from '../components/TaskForm';
 import { loadData, saveData } from '../utils/storage';
 import { supabase } from '../utils/supabase';
+import {
+  DatedTask,
+  formatTimeRange,
+  fromYMD,
+  getTagColor,
+  isMustDo,
+  MUST_DO_TAG,
+  priorityColor,
+  Task,
+  TaskInput,
+  tasksForDate,
+  toYMD,
+  useTasks,
+  useTimeFormat,
+} from '../utils/tasks';
 import { useTheme } from '../utils/theme';
 
-const STORAGE_KEY = 'planner_events';
-const TASKS_KEY = 'tasks';
 const HEIGHT_STORAGE_KEY = 'health_user_height_cm';
-
-type PlannerEvent = {
-  id: string;
-  title: string;
-  date: string;   // YYYY-MM-DD
-  time: string;   // HH:MM (24h)
-  notes: string;
-  notificationId?: string | null;
-};
-
-type StoredTask = {
-  id: string;
-  title: string;
-  done: boolean;
-  priority: 'low' | 'medium' | 'high';
-  dueDate: string;          // ISO
-  dueTime?: string;         // HH:MM
-  recurrence: 'none' | 'daily' | 'weekly' | 'monthly';
-  tags?: string[];
-};
+const FILTERS_STORAGE_KEY = 'planner:filters';
 
 type WorkoutSession = {
   id: string;
@@ -61,36 +44,23 @@ type HealthStatRow = {
   notes: string | null;
 };
 
-type FilterKey = 'all' | 'events' | 'oneoff' | 'routine' | 'workouts' | 'health';
+type FilterKey = 'tasks' | 'repeating' | 'daily' | 'mustdo' | 'workouts' | 'health';
 
-const FILTERS: { key: FilterKey; label: string; color: string }[] = [
-  { key: 'all',      label: 'All',      color: '#0d9488' }, // teal
-  { key: 'events',   label: 'Events',   color: '#6366f1' }, // indigo
-  { key: 'oneoff',   label: 'One-off',  color: '#d4a017' }, // gold
-  { key: 'routine',  label: 'Routine',  color: '#84a98c' }, // sage
-  { key: 'workouts', label: 'Workouts', color: '#c44569' }, // rose
-  { key: 'health',   label: 'Health',   color: '#0ea5e9' }, // sky
+/** Independent on/off filters. Daily repeats are off by default to avoid clutter. */
+const FILTERS: { key: FilterKey; label: string; color: string; defaultOn: boolean }[] = [
+  { key: 'tasks',     label: 'Tasks',     color: '#6366f1', defaultOn: true },  // indigo
+  { key: 'repeating', label: 'Repeating', color: '#d4a017', defaultOn: true },  // gold
+  { key: 'daily',     label: 'Daily',     color: '#84a98c', defaultOn: false }, // sage
+  { key: 'mustdo',    label: 'Must Do',   color: '#0d9488', defaultOn: true },  // teal
+  { key: 'workouts',  label: 'Workouts',  color: '#c44569', defaultOn: true },  // rose
+  { key: 'health',    label: 'Health',    color: '#0ea5e9', defaultOn: true },  // sky
 ];
 
-// ── Date helpers ─────────────────────────────────────────────────────────────
+type FilterState = Record<FilterKey, boolean>;
 
-function toYMD(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
+const DEFAULT_FILTERS = Object.fromEntries(FILTERS.map((f) => [f.key, f.defaultOn])) as FilterState;
 
-function toHHMM(date: Date): string {
-  return date.toTimeString().slice(0, 5);
-}
-
-function formatEventTime(time: string): string {
-  const [h, m] = time.split(':').map(Number);
-  const period = h >= 12 ? 'PM' : 'AM';
-  const hour = h % 12 === 0 ? 12 : h % 12;
-  return `${hour}:${String(m).padStart(2, '0')} ${period}`;
-}
+const DOT_COLORS = { task: '#6366f1', workout: '#c44569', health: '#0ea5e9' };
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -123,51 +93,54 @@ function bmiCategory(b: number) {
   return 'Obese';
 }
 
-const PRIORITY_COLORS: Record<StoredTask['priority'], string> = {
-  low: '#84a98c',
-  medium: '#d4a017',
-  high: '#c44569',
-};
+/**
+ * Future daily repeats only show when the Daily filter is on (they'd otherwise
+ * put a dot on every day). A daily task's real instance (normally today's) still
+ * shows under Must Do, so a daily Must Do task never disappears from today.
+ * Anything else shows if its type filter or Must Do is on.
+ */
+function taskPassesFilters(task: Task, projected: boolean, f: FilterState) {
+  if (task.recurrence === 'daily') {
+    if (f.daily) return true;
+    return !projected && f.mustdo && isMustDo(task);
+  }
+  if (f.mustdo && isMustDo(task)) return true;
+  if (task.recurrence === 'none') return f.tasks;
+  return f.repeating;
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function PlannerScreen() {
   const theme = useTheme();
+  const isDark = useColorScheme() === 'dark';
   const today = new Date();
   const todayYMD = toYMD(today);
 
   const [displayYear, setDisplayYear] = useState(today.getFullYear());
   const [displayMonth, setDisplayMonth] = useState(today.getMonth());
   const [selectedDate, setSelectedDate] = useState(todayYMD);
-  const [filter, setFilter] = useState<FilterKey>('all');
+  const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
 
-  const [events, setEvents] = useState<PlannerEvent[]>([]);
-  const [tasks, setTasks] = useState<StoredTask[]>([]);
+  const { tasks, addTask, updateTask, deleteTask, toggleDone } = useTasks();
+  const { is24Hour, toggle24Hour } = useTimeFormat();
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [healthStats, setHealthStats] = useState<HealthStatRow[]>([]);
   const [userHeight, setUserHeight] = useState<number | null>(null);
 
-  // Modal state
-  const [modalVisible, setModalVisible] = useState(false);
-  const [title, setTitle] = useState('');
-  const [notes, setNotes] = useState('');
-  const [eventTime, setEventTime] = useState(new Date());
-  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<Task | null>(null);
 
-  // ── Load on mount ──────────────────────────────────────────────────────────
   useEffect(() => {
-    loadData(STORAGE_KEY).then((stored) => {
-      if (stored) setEvents(stored);
+    loadData(FILTERS_STORAGE_KEY).then((stored) => {
+      if (stored && typeof stored === 'object') setFilters({ ...DEFAULT_FILTERS, ...stored });
     });
   }, []);
 
-  // Refresh tasks + remote data each time the planner is focused, so changes
-  // made in other tabs (or in the Health screen) show up here.
+  // Refresh remote data each time the planner is focused, so changes made in
+  // the Health screen show up here. (Tasks reload via useTasks.)
   useFocusEffect(
     useCallback(() => {
-      loadData(TASKS_KEY).then((stored) => {
-        if (stored) setTasks(stored);
-      });
       loadData(HEIGHT_STORAGE_KEY).then((stored) => {
         if (typeof stored === 'number' && stored > 0) setUserHeight(stored);
         else setUserHeight(null);
@@ -178,10 +151,11 @@ export default function PlannerScreen() {
   );
 
   async function fetchSessions() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('workout_sessions')
       .select('id, name, performed_at, workout_session_exercises(count)')
       .order('performed_at', { ascending: false });
+    if (error) console.error('Failed to load workout sessions:', error.message);
     if (data) {
       setSessions(
         data.map((s: any) => ({
@@ -195,16 +169,20 @@ export default function PlannerScreen() {
   }
 
   async function fetchHealthStats() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('health_stats')
       .select('id, recorded_at, weight, waist, chest, hips, arms, thighs, notes')
       .order('recorded_at', { ascending: false });
+    if (error) console.error('Failed to load health stats:', error.message);
     if (data) setHealthStats(data as HealthStatRow[]);
   }
 
-  async function persist(updated: PlannerEvent[]) {
-    setEvents(updated);
-    await saveData(STORAGE_KEY, updated);
+  function toggleFilter(key: FilterKey) {
+    setFilters((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      saveData(FILTERS_STORAGE_KEY, next);
+      return next;
+    });
   }
 
   // ── Month navigation ────────────────────────────────────────────────────────
@@ -227,154 +205,138 @@ export default function PlannerScreen() {
     }
   }
 
-  // ── Add event ───────────────────────────────────────────────────────────────
-
-  function openModal() {
-    setTitle('');
-    setNotes('');
-    setEventTime(new Date());
-    setShowTimePicker(false);
-    setModalVisible(true);
+  function goToToday() {
+    setDisplayYear(today.getFullYear());
+    setDisplayMonth(today.getMonth());
+    setSelectedDate(todayYMD);
   }
 
-  async function saveEvent() {
-    if (!title.trim()) {
-      Alert.alert('Missing title', 'Please enter an event title.');
-      return;
-    }
-    const notificationId = await scheduleEventNotification(
-      title.trim(),
-      notes.trim(),
-      selectedDate,
-      toHHMM(eventTime)
-    );
-    const newEvent: PlannerEvent = {
-      id: Date.now().toString(),
-      title: title.trim(),
-      date: selectedDate,
-      time: toHHMM(eventTime),
-      notes: notes.trim(),
-      notificationId,
-    };
-    const updated = [...events, newEvent].sort((a, b) =>
-      a.date === b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date)
-    );
-    persist(updated);
-    setModalVisible(false);
+  // ── Add / edit ──────────────────────────────────────────────────────────────
+
+  function openAdd() {
+    setEditing(null);
+    setFormOpen(true);
   }
 
-  function confirmDelete(id: string) {
-    Alert.alert('Delete event', 'Remove this event?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          const event = events.find((e) => e.id === id);
-          if (event?.notificationId) await cancelEventNotification(event.notificationId);
-          persist(events.filter((e) => e.id !== id));
-        },
-      },
-    ]);
+  function openEdit(task: Task) {
+    setEditing(task);
+    setFormOpen(true);
+  }
+
+  /** A projected repeat isn't its own task: editing it changes the whole series. */
+  function confirmEditSeries(task: Task) {
+    const nextDate = fromYMD(task.date).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    Alert.alert(
+      'Upcoming repeat',
+      `This is a future repeat of “${task.title}”. Its next instance is on ${nextDate}. Changes apply to the whole series.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Edit series', onPress: () => openEdit(task) },
+      ]
+    );
+  }
+
+  async function handleSubmit(input: TaskInput) {
+    if (editing) await updateTask(editing.id, input);
+    else await addTask(input);
+    setFormOpen(false);
   }
 
   // ── Derived ─────────────────────────────────────────────────────────────────
 
   const calendarDays = buildMonthGrid(displayYear, displayMonth);
 
-  function passesFilter(kind: 'event' | 'oneoff' | 'routine' | 'workout' | 'health') {
-    if (filter === 'all') return true;
-    if (filter === 'events')   return kind === 'event';
-    if (filter === 'oneoff')   return kind === 'oneoff';
-    if (filter === 'routine')  return kind === 'routine';
-    if (filter === 'workouts') return kind === 'workout';
-    if (filter === 'health')   return kind === 'health';
-    return false;
+  function visibleTasksOn(ymd: string): DatedTask[] {
+    return tasksForDate(tasks, ymd).filter((d) => taskPassesFilters(d.task, d.projected, filters));
   }
 
-  function dateHasItems(ymd: string) {
-    if (passesFilter('event')   && events.some((e) => e.date === ymd)) return true;
-    if (passesFilter('oneoff')  && tasks.some((t) => t.recurrence === 'none' && toYMD(new Date(t.dueDate)) === ymd)) return true;
-    if (passesFilter('routine') && tasks.some((t) => t.recurrence !== 'none' && toYMD(new Date(t.dueDate)) === ymd)) return true;
-    if (passesFilter('workout') && sessions.some((s) => s.performed_at === ymd)) return true;
-    if (passesFilter('health')  && healthStats.some((s) => s.recorded_at === ymd)) return true;
-    return false;
+  function dotsFor(ymd: string): string[] {
+    const dots: string[] = [];
+    if (visibleTasksOn(ymd).length > 0) dots.push(DOT_COLORS.task);
+    if (filters.workouts && sessions.some((s) => s.performed_at === ymd)) dots.push(DOT_COLORS.workout);
+    if (filters.health && healthStats.some((s) => s.recorded_at === ymd)) dots.push(DOT_COLORS.health);
+    return dots;
   }
 
-  const dayEvents     = passesFilter('event')   ? events.filter((e) => e.date === selectedDate) : [];
-  const dayOneoff     = passesFilter('oneoff')  ? tasks.filter((t) => t.recurrence === 'none' && toYMD(new Date(t.dueDate)) === selectedDate) : [];
-  const dayRoutine    = passesFilter('routine') ? tasks.filter((t) => t.recurrence !== 'none' && toYMD(new Date(t.dueDate)) === selectedDate) : [];
-  const daySessions   = passesFilter('workout') ? sessions.filter((s) => s.performed_at === selectedDate) : [];
-  const dayHealth     = passesFilter('health')  ? healthStats.filter((s) => s.recorded_at === selectedDate) : [];
+  const dayTasks    = visibleTasksOn(selectedDate);
+  const daySessions = filters.workouts ? sessions.filter((s) => s.performed_at === selectedDate) : [];
+  const dayHealth   = filters.health ? healthStats.filter((s) => s.recorded_at === selectedDate) : [];
+  const dayHasAnything = dayTasks.length + daySessions.length + dayHealth.length > 0;
+  const isOnToday =
+    selectedDate === todayYMD && displayMonth === today.getMonth() && displayYear === today.getFullYear();
 
-  const dayHasAnything =
-    dayEvents.length + dayOneoff.length + dayRoutine.length + daySessions.length + dayHealth.length > 0;
+  // Calendar text colours (theme-aware)
+  const dayTextColor = theme.text;
+  const outsideMonthColor = isDark ? '#44403c' : '#d6d3d1';
+  const todayBg = isDark ? '#134e4a' : '#ccfbf1';
+  const todayText = isDark ? '#5eead4' : '#0d9488';
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
-  function renderEvent(item: PlannerEvent) {
+  function renderTask({ task, projected }: DatedTask) {
+    const time = formatTimeRange(task, is24Hour);
+    const rec = task.recurrence;
     return (
-      <View key={`event-${item.id}`} className="flex-row items-start bg-white dark:bg-stone-800 rounded-[10px] p-3 mb-2.5 shadow-sm">
-        <View className="w-[68px] mr-2.5">
-          <Text className="text-xs font-bold text-teal-700">{formatEventTime(item.time)}</Text>
-        </View>
-        <View className="flex-1">
-          <View className="flex-row items-center mb-0.5" style={{ gap: 6 }}>
-            <Text className="text-[15px] font-semibold text-stone-800 dark:text-stone-100">{item.title}</Text>
-            <View className="bg-teal-50 border border-teal-100 rounded-full px-2 py-0.5">
-              <Text className="text-[10px] font-semibold text-teal-700">Event</Text>
-            </View>
+      <TouchableOpacity
+        key={`task-${task.id}-${projected ? selectedDate : 'real'}`}
+        activeOpacity={0.7}
+        onPress={() => (projected ? confirmEditSeries(task) : openEdit(task))}
+        className="flex-row items-center bg-white dark:bg-stone-800 rounded-[10px] mb-2.5 overflow-hidden"
+        style={{ borderLeftWidth: 4, borderLeftColor: priorityColor(task.priority), opacity: projected ? 0.55 : 1 }}
+      >
+        {projected ? (
+          <View className="w-[46px] items-center">
+            <Text className="text-base text-stone-400 dark:text-stone-500">🔄</Text>
           </View>
-          {item.notes ? (
-            <Text className="text-[13px] text-stone-500 dark:text-stone-400 mt-[3px]">{item.notes}</Text>
-          ) : null}
-        </View>
-        <TouchableOpacity className="p-1" onPress={() => confirmDelete(item.id)}>
-          <Text className="text-sm text-stone-400 dark:text-stone-500">✕</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  function renderTask(item: StoredTask) {
-    const isRoutine = item.recurrence !== 'none';
-    const badgeBg = isRoutine ? '#fef3c7' : '#e0f2fe';
-    const badgeBorder = isRoutine ? '#fde68a' : '#bae6fd';
-    const badgeText = isRoutine ? '#a16207' : '#0369a1';
-    return (
-      <View key={`task-${item.id}`} className="flex-row items-start bg-white dark:bg-stone-800 rounded-[10px] p-3 mb-2.5 shadow-sm">
-        <View className="w-[68px] mr-2.5">
-          <Text className="text-xs font-bold text-stone-500 dark:text-stone-400">
-            {item.dueTime ? formatEventTime(item.dueTime) : 'Task'}
+        ) : (
+          <TouchableOpacity
+            className="pl-3 pr-2.5 py-3"
+            onPress={() => toggleDone(task.id)}
+            hitSlop={6}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: task.done }}
+          >
+            <View className="w-[22px] h-[22px] rounded-[6px] border-2 border-teal-600 items-center justify-center">
+              {task.done && <View className="w-[11px] h-[11px] rounded-[3px] bg-teal-600" />}
+            </View>
+          </TouchableOpacity>
+        )}
+        <View className="flex-1 py-2.5 pr-3">
+          <Text
+            numberOfLines={2}
+            className={`text-[15px] font-semibold ${task.done ? 'line-through text-stone-400 dark:text-stone-500' : 'text-stone-800 dark:text-stone-100'}`}
+          >
+            {task.title}
           </Text>
-        </View>
-        <View className="flex-1">
-          <View className="flex-row items-center flex-wrap" style={{ gap: 6 }}>
-            <Text
-              className={`text-[15px] font-semibold ${item.done ? 'line-through text-stone-400 dark:text-stone-500' : 'text-stone-800 dark:text-stone-100'}`}
-            >
-              {item.title}
-            </Text>
-            <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: badgeBg, borderWidth: 1, borderColor: badgeBorder }}>
-              <Text className="text-[10px] font-semibold" style={{ color: badgeText }}>
-                {isRoutine ? `🔄 ${item.recurrence.charAt(0).toUpperCase() + item.recurrence.slice(1)}` : 'One-off'}
+          <View className="flex-row flex-wrap items-center mt-0.5" style={{ gap: 4 }}>
+            {time ? <Text className="text-xs font-bold text-teal-700 dark:text-teal-400 mr-1">{time}</Text> : null}
+            {rec !== 'none' && (
+              <Text className="text-[11px] text-stone-500 dark:text-stone-400 mr-1">
+                {projected ? 'Upcoming repeat' : `🔄 ${rec.charAt(0).toUpperCase() + rec.slice(1)}`}
               </Text>
-            </View>
-            <View className="rounded-[6px] px-[6px] py-[2px]" style={{
-              backgroundColor: PRIORITY_COLORS[item.priority] + '22',
-              borderWidth: 1,
-              borderColor: PRIORITY_COLORS[item.priority],
-            }}>
-              <Text className="text-[10px] font-semibold" style={{ color: PRIORITY_COLORS[item.priority] }}>
-                {item.priority.charAt(0).toUpperCase() + item.priority.slice(1)}
-              </Text>
-            </View>
+            )}
+            {task.tags.map((tag) => {
+              const c = getTagColor(tag);
+              return (
+                <View
+                  key={tag}
+                  className="rounded-full px-1.5 py-[1px]"
+                  style={{ backgroundColor: c.bg, borderWidth: 1, borderColor: c.border }}
+                >
+                  <Text className="text-[10px] font-semibold" style={{ color: c.text }}>
+                    {tag === MUST_DO_TAG ? '★ Must Do' : tag}
+                  </Text>
+                </View>
+              );
+            })}
           </View>
-          {item.tags && item.tags.length > 0 ? (
-            <Text className="text-[11px] text-stone-400 dark:text-stone-500 mt-0.5">{item.tags.join(' · ')}</Text>
+          {task.notes ? (
+            <Text className="text-[12px] text-stone-500 dark:text-stone-400 mt-1" numberOfLines={2}>
+              {task.notes}
+            </Text>
           ) : null}
         </View>
-      </View>
+      </TouchableOpacity>
     );
   }
 
@@ -440,25 +402,22 @@ export default function PlannerScreen() {
     );
   }
 
+
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: theme.background }}>
 
       {/* ── Month navigation header ── */}
       <View className="flex-row items-center justify-between px-4 pt-4 pb-3">
         <TouchableOpacity className="p-2" onPress={prevMonth}>
-          <Text className="text-2xl text-teal-700 font-semibold">‹</Text>
+          <Text className="text-2xl text-teal-700 dark:text-teal-400 font-semibold">‹</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => {
-          setDisplayYear(today.getFullYear());
-          setDisplayMonth(today.getMonth());
-          setSelectedDate(todayYMD);
-        }}>
+        <TouchableOpacity onPress={goToToday}>
           <Text className="text-base font-bold text-stone-800 dark:text-stone-100">
             {MONTH_NAMES[displayMonth]} {displayYear}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity className="p-2" onPress={nextMonth}>
-          <Text className="text-2xl text-teal-700 font-semibold">›</Text>
+          <Text className="text-2xl text-teal-700 dark:text-teal-400 font-semibold">›</Text>
         </TouchableOpacity>
       </View>
 
@@ -480,7 +439,7 @@ export default function PlannerScreen() {
               const isCurrentMonth = day.getMonth() === displayMonth;
               const isToday = ymd === todayYMD;
               const isSelected = ymd === selectedDate;
-              const hasEvents = dateHasItems(ymd);
+              const dots = dotsFor(ymd);
 
               return (
                 <TouchableOpacity
@@ -494,7 +453,7 @@ export default function PlannerScreen() {
                       isSelected
                         ? { backgroundColor: '#0d9488' }
                         : isToday
-                        ? { backgroundColor: '#ccfbf1' }
+                        ? { backgroundColor: todayBg }
                         : undefined
                     }
                   >
@@ -504,23 +463,24 @@ export default function PlannerScreen() {
                         color: isSelected
                           ? '#ffffff'
                           : isToday
-                          ? '#0d9488'
+                          ? todayText
                           : isCurrentMonth
-                          ? '#1f2933'
-                          : '#d6d3d1',
+                          ? dayTextColor
+                          : outsideMonthColor,
                       }}
                     >
                       {day.getDate()}
                     </Text>
                   </View>
-                  {/* Event dot */}
-                  <View className="h-[5px] items-center justify-center mt-[1px]">
-                    {hasEvents && (
+                  {/* One dot per item type */}
+                  <View className="h-[5px] flex-row items-center justify-center mt-[1px]" style={{ gap: 2 }}>
+                    {dots.map((color) => (
                       <View
+                        key={color}
                         className="w-[5px] h-[5px] rounded-full"
-                        style={{ backgroundColor: isSelected ? '#5eead4' : '#0d9488' }}
+                        style={{ backgroundColor: color, opacity: isCurrentMonth ? 1 : 0.4 }}
                       />
-                    )}
+                    ))}
                   </View>
                 </TouchableOpacity>
               );
@@ -529,30 +489,30 @@ export default function PlannerScreen() {
         ))}
       </View>
 
-      {/* ── Filter chips ── */}
+      {/* ── Filter chips (toggles) ── */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 8, gap: 6 }}
+        style={{ flexGrow: 0, flexShrink: 0 }}
+        contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 10, gap: 6, alignItems: 'center' }}
       >
         {FILTERS.map((f) => {
-          const selected = filter === f.key;
+          const on = filters[f.key];
           return (
             <TouchableOpacity
               key={f.key}
-              className="rounded-full px-2.5 py-0.5 border-[1.5px]"
-              style={
-                selected
-                  ? { backgroundColor: f.color, borderColor: f.color }
-                  : { backgroundColor: 'transparent', borderColor: f.color }
-              }
-              onPress={() => setFilter(f.key)}
+              className="flex-row items-center rounded-full px-3 border-[1.5px]"
+              style={{
+                height: 28,
+                backgroundColor: on ? f.color : 'transparent',
+                borderColor: f.color,
+              }}
+              onPress={() => toggleFilter(f.key)}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: on }}
             >
-              <Text
-                className="text-[11px] font-semibold"
-                style={{ color: selected ? '#ffffff' : f.color }}
-              >
-                {f.label}
+              <Text className="text-[12px] font-semibold" style={{ color: on ? '#ffffff' : f.color }}>
+                {on ? '✓ ' : ''}{f.label}
               </Text>
             </TouchableOpacity>
           );
@@ -563,7 +523,7 @@ export default function PlannerScreen() {
       <View className="h-px bg-stone-200 dark:bg-stone-700 mx-4 mb-3" />
       <View className="flex-row items-center justify-between px-4 mb-3">
         <Text className="text-sm font-semibold text-stone-600 dark:text-stone-300 flex-1" numberOfLines={1}>
-          {new Date(selectedDate + 'T00:00:00').toLocaleDateString(undefined, {
+          {fromYMD(selectedDate).toLocaleDateString(undefined, {
             weekday: 'long',
             month: 'long',
             day: 'numeric',
@@ -572,124 +532,43 @@ export default function PlannerScreen() {
         <View className="flex-row" style={{ gap: 8 }}>
           <TouchableOpacity
             className="rounded-lg px-3 py-2 border-[1.5px] border-teal-600"
-            disabled={selectedDate === todayYMD && displayMonth === today.getMonth() && displayYear === today.getFullYear()}
-            style={
-              selectedDate === todayYMD && displayMonth === today.getMonth() && displayYear === today.getFullYear()
-                ? { opacity: 0.4 }
-                : undefined
-            }
-            onPress={() => {
-              setDisplayYear(today.getFullYear());
-              setDisplayMonth(today.getMonth());
-              setSelectedDate(todayYMD);
-            }}
+            disabled={isOnToday}
+            style={isOnToday ? { opacity: 0.4 } : undefined}
+            onPress={goToToday}
           >
-            <Text className="text-teal-700 text-[13px] font-bold">Today</Text>
+            <Text className="text-teal-700 dark:text-teal-400 text-[13px] font-bold">Today</Text>
           </TouchableOpacity>
-          <TouchableOpacity className="bg-teal-600 rounded-lg px-3.5 py-2" onPress={openModal}>
-            <Text className="text-white text-[13px] font-bold">+ Add Event</Text>
+          <TouchableOpacity className="bg-teal-600 rounded-lg px-3.5 py-2" onPress={openAdd}>
+            <Text className="text-white text-[13px] font-bold">+ Add</Text>
           </TouchableOpacity>
         </View>
       </View>
 
       {/* ── Items for selected day ── */}
-      <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
         {!dayHasAnything ? (
           <Text className="text-center text-stone-400 dark:text-stone-500 mt-6 text-sm">
             Nothing for this day.
           </Text>
         ) : (
           <>
-            {dayEvents.map(renderEvent)}
-            {dayOneoff.map(renderTask)}
-            {dayRoutine.map(renderTask)}
+            {dayTasks.map(renderTask)}
             {daySessions.map(renderSession)}
             {dayHealth.map(renderHealth)}
           </>
         )}
       </ScrollView>
 
-      {/* ── Add event modal ── */}
-      <Modal
-        visible={modalVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <Pressable
-          className="flex-1 bg-black/40 justify-end"
-          onPress={() => setModalVisible(false)}
-        >
-          <Pressable className="bg-white dark:bg-stone-800 rounded-t-[20px] p-6 pb-10" onPress={() => {}}>
-            <Text className="text-xl font-bold text-stone-800 dark:text-stone-100 mb-0.5">New Event</Text>
-            <Text className="text-[13px] text-stone-500 dark:text-stone-400 mb-4">
-              {new Date(selectedDate + 'T00:00:00').toLocaleDateString(undefined, {
-                weekday: 'long',
-                month: 'long',
-                day: 'numeric',
-              })}
-            </Text>
-
-            <TextInput
-              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100 mb-3"
-              placeholder="Event title…"
-              placeholderTextColor={theme.placeholder}
-              value={title}
-              onChangeText={setTitle}
-              returnKeyType="next"
-              autoFocus
-            />
-
-            <TouchableOpacity
-              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 mb-3"
-              onPress={() => setShowTimePicker(true)}
-            >
-              <Text className="text-sm text-stone-600 dark:text-stone-300">
-                Time: {formatEventTime(toHHMM(eventTime))}
-              </Text>
-            </TouchableOpacity>
-
-            {showTimePicker && (
-              <DateTimePicker
-                value={eventTime}
-                mode="time"
-                is24Hour={false}
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={(_, selected) => {
-                  setShowTimePicker(Platform.OS === 'ios');
-                  if (selected) setEventTime(selected);
-                }}
-              />
-            )}
-
-            <TextInput
-              className="border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100 mb-3 h-20"
-              placeholder="Notes (optional)…"
-              placeholderTextColor={theme.placeholder}
-              value={notes}
-              onChangeText={setNotes}
-              multiline
-              returnKeyType="done"
-              textAlignVertical="top"
-            />
-
-            <View className="flex-row mt-1" style={{ gap: 12 }}>
-              <TouchableOpacity
-                className="flex-1 border-[1.5px] border-stone-200 dark:border-stone-700 rounded-lg py-3 items-center"
-                onPress={() => setModalVisible(false)}
-              >
-                <Text className="text-[15px] font-semibold text-stone-500 dark:text-stone-400">Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                className="flex-1 bg-teal-600 rounded-lg py-3 items-center"
-                onPress={saveEvent}
-              >
-                <Text className="text-[15px] font-bold text-white">Save</Text>
-              </TouchableOpacity>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <TaskForm
+        visible={formOpen}
+        task={editing}
+        defaultDate={selectedDate}
+        is24Hour={is24Hour}
+        onToggle24Hour={toggle24Hour}
+        onSubmit={handleSubmit}
+        onDelete={editing ? () => { deleteTask(editing.id); setFormOpen(false); } : undefined}
+        onClose={() => setFormOpen(false)}
+      />
     </SafeAreaView>
   );
 }

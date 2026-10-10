@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { z } from 'zod';
+import StepsCard from '../components/StepsCard';
 import { loadData, saveData } from '../utils/storage';
 import { supabase } from '../utils/supabase';
 import { useTheme } from '../utils/theme';
@@ -659,6 +660,9 @@ export default function HealthScreen() {
           contentContainerStyle={{ paddingBottom: 32 }}
           keyboardShouldPersistTaps="handled"
         >
+          {/* ── Steps (Android, Health Connect) ── */}
+          <StepsCard />
+
           {/* ── Height (one-time) ── */}
           {(userHeight === null || editingHeight) && (
             <View className="mx-4 mb-3 p-4 bg-white dark:bg-stone-800 rounded-xl shadow">

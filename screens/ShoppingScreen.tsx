@@ -1,6 +1,6 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as DocumentPicker from 'expo-document-picker';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Modal,
@@ -14,6 +14,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { z } from 'zod';
+import {
+  applyRecords,
+  buildSuggestions,
+  HistoryEntry,
+  loadHistory,
+  mergeHistory,
+  saveHistory,
+} from '../utils/shoppingHistory';
 import { loadData, saveData } from '../utils/storage';
 import { supabase } from '../utils/supabase';
 import { useTheme } from '../utils/theme';
@@ -115,6 +123,14 @@ export default function ShoppingScreen() {
   const [expandedListId, setExpandedListId] = useState<string | null>(null);
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [favoriteItems, setFavoriteItems] = useState<FavoriteItem[]>([]);
+  // Names previously added, for suggestions. Local history and saved-list rows
+  // are kept apart and merged on render, so neither overwrites the other.
+  const [localHistory, setLocalHistory] = useState<HistoryEntry[]>([]);
+  const [remoteHistory, setRemoteHistory] = useState<{ name: string; category: string | null }[]>([]);
+  const itemHistory = useMemo(() => mergeHistory(localHistory, remoteHistory), [localHistory, remoteHistory]);
+  // Serialises history updates: each one starts from the result of the last,
+  // and the first waits for the stored history to load.
+  const historyChain = useRef<Promise<HistoryEntry[]> | null>(null);
 
   // UI toggles
   const [showCatalog, setShowCatalog] = useState(false);
@@ -138,6 +154,7 @@ export default function ShoppingScreen() {
     });
     fetchCatalog();
     fetchFavorites();
+    fetchHistory();
   }, []);
 
   useEffect(() => {
@@ -146,13 +163,39 @@ export default function ShoppingScreen() {
 
   // ─── Supabase fetches ───────────────────────────────────────────────────────
   async function fetchCatalog() {
-    const { data } = await supabase.from('catalog_items').select('id, name').order('name');
+    const { data, error } = await supabase.from('catalog_items').select('id, name').order('name');
+    if (error) console.error('Failed to load catalog:', error.message);
     if (data) setCatalogItems(data);
   }
 
   async function fetchFavorites() {
-    const { data } = await supabase.from('favorite_items').select('id, name').order('name');
+    const { data, error } = await supabase.from('favorite_items').select('id, name').order('name');
+    if (error) console.error('Failed to load favourites:', error.message);
     if (data) setFavoriteItems(data);
+  }
+
+  /** Local add-history plus every item name from saved lists. */
+  async function fetchHistory() {
+    if (!historyChain.current) {
+      historyChain.current = loadHistory().then((local) => {
+        setLocalHistory(local);
+        return local;
+      });
+    }
+    const { data, error } = await supabase.from('shopping_list_items').select('name, category');
+    if (error) console.error('Failed to load past list items:', error.message);
+    if (data) setRemoteHistory(data);
+  }
+
+  function remember(added: { name: string; category?: string }[]) {
+    if (added.length === 0) return;
+    const base = historyChain.current ?? loadHistory();
+    historyChain.current = base.then(async (current) => {
+      const next = applyRecords(current, added);
+      setLocalHistory(next);
+      await saveHistory(next);
+      return next;
+    });
   }
 
   async function fetchSavedLists() {
@@ -200,6 +243,7 @@ export default function ShoppingScreen() {
       category: parsed.data.category,
     };
     persist([...items, newItem]);
+    remember([{ name: newItem.name, category: newItem.category }]);
     setItemName('');
     setItemQty('');
     setItemCategory(DEFAULT_CATEGORY);
@@ -207,6 +251,7 @@ export default function ShoppingScreen() {
 
   function addFromCatalog(name: string) {
     if (items.some((i) => i.name.toLowerCase() === name.toLowerCase())) return;
+    remember([{ name }]);
     persist([
       ...items,
       {
@@ -222,6 +267,7 @@ export default function ShoppingScreen() {
 
   function addFromFavorites(name: string) {
     if (items.some((i) => i.name.toLowerCase() === name.toLowerCase())) return;
+    remember([{ name }]);
     persist([
       ...items,
       {
@@ -272,7 +318,10 @@ export default function ShoppingScreen() {
         });
       }
 
-      if (newItems.length > 0) persist([...items, ...newItems]);
+      if (newItems.length > 0) {
+        persist([...items, ...newItems]);
+        remember(newItems.map((i) => ({ name: i.name })));
+      }
 
       Alert.alert(
         'Import complete',
@@ -662,29 +711,12 @@ export default function ShoppingScreen() {
 
           {/* Item name with autocomplete */}
           {(() => {
-            const nameLower = itemName.toLowerCase().trim();
-            const suggestions: Array<{ name: string; isFavorite: boolean }> =
-              nameLower.length === 0
-                ? []
-                : [
-                    ...catalogItems
-                      .filter(
-                        (c) =>
-                          c.name.toLowerCase().includes(nameLower) &&
-                          c.name.toLowerCase() !== nameLower
-                      )
-                      .map((c) => ({ name: c.name, isFavorite: false })),
-                    ...favoriteItems
-                      .filter(
-                        (f) =>
-                          f.name.toLowerCase().includes(nameLower) &&
-                          f.name.toLowerCase() !== nameLower &&
-                          !catalogItems.some(
-                            (c) => c.name.toLowerCase() === f.name.toLowerCase()
-                          )
-                      )
-                      .map((f) => ({ name: f.name, isFavorite: true })),
-                  ];
+            const suggestions = buildSuggestions(itemName, {
+              favourites: favoriteItems.map((f) => f.name),
+              history: itemHistory,
+              catalog: catalogItems.map((c) => c.name),
+              exclude: items.map((i) => i.name),
+            });
             return (
               <View className="mb-3">
                 <TextInput
@@ -705,12 +737,15 @@ export default function ShoppingScreen() {
                         className={`flex-row items-center px-3 py-2.5 ${
                           index > 0 ? 'border-t border-stone-100 dark:border-stone-700' : ''
                         }`}
-                        onPress={() => setItemName(s.name)}
+                        onPress={() => {
+                          setItemName(s.name);
+                          if (s.category) setItemCategory(normalizeCategory(s.category));
+                        }}
                       >
-                        {s.isFavorite && <Text className="text-amber-500 mr-2 text-sm">★</Text>}
+                        {s.source === 'favourite' && <Text className="text-amber-500 mr-2 text-sm">★</Text>}
                         <Text className="text-[14px] text-stone-700 dark:text-stone-200 flex-1">{s.name}</Text>
                         <Text className="text-[11px] text-stone-400 dark:text-stone-500">
-                          {s.isFavorite ? 'favourite' : 'catalog'}
+                          {s.source === 'history' ? 'previous' : s.source}
                         </Text>
                       </TouchableOpacity>
                     ))}
