@@ -1,51 +1,120 @@
-# Welcome to your Expo app 👋
+# MyPlannerApp
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A personal planner for Android and iOS, built with Expo and React Native. It keeps your tasks, calendar, shopping lists and fitness tracking in one app.
 
-## Get started
+## Features
 
-1. Install dependencies
+### ✅ Tasks
+- Today view with a **Must Do** progress bar showing how many of today's key tasks are done
+- Priorities (low / medium / high), shown as a coloured edge on each card
+- Start and end times, notes and tags
+- Repeating tasks (daily, weekly, monthly)
+- Overdue section for unfinished tasks from earlier days
+- Reminder notifications for any task with a start time
+- Tap a card to edit it, long-press to delete
 
-   ```bash
-   npm install
-   ```
+### 📅 Planner
+- Monthly calendar with coloured dots for tasks, workouts and health entries
+- Filter chips you can toggle on and off independently: Tasks, Repeating, Daily, Must Do, Workouts and Health. The app remembers your choice.
+- Upcoming repeats of recurring tasks appear on future dates
+- Add, edit and tick off tasks for the selected day
 
-2. Start the app
+### 🛒 Shopping
+- Shopping list grouped by category (Fresh Food, Frozen Food, Bakery, Drinks, Household, Other)
+- Quick-add from a catalogue of common items, favourites, and things you've bought before
+- Save lists with an optional delivery date and reload them later
+- Import a list from a `.txt` or `.csv` file
 
-   ```bash
-   npx expo start
-   ```
+### 💪 Health
+- Workout builder with an exercise catalogue, sets, reps and weight
+- Save workouts to history, or save them as reusable routines
+- Body stats log for weight, waist, chest, hips, arms and thighs, with automatic BMI
+- Daily step count and history from **Android Health Connect**, with a step goal
 
-In the output, you'll find options to open the app in a
+### 🌙 General
+- Light and dark mode that follow your system setting
+- Haptic feedback on tab presses
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+## Tech stack
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+| | |
+|---|---|
+| Framework | [Expo](https://expo.dev) SDK 54, React Native 0.81, React 19 |
+| Navigation | [Expo Router](https://docs.expo.dev/router/introduction/) (file-based tabs) |
+| Styling | [NativeWind](https://www.nativewind.dev/) (Tailwind CSS) |
+| Storage | AsyncStorage on the device. Nothing is sent to a server. |
+| Validation | [Zod](https://zod.dev) |
+| Health data | [react-native-health-connect](https://github.com/matinzd/react-native-health-connect) |
+| Notifications | expo-notifications |
+| Builds and updates | EAS Build and EAS Update |
 
-## Get a fresh project
+## Getting started
 
-When you're ready, run:
+### Prerequisites
+- Node.js 20 or newer and npm
+- [EAS CLI](https://docs.expo.dev/eas/) (`npm install -g eas-cli`) if you want to make builds
+- An Android device or emulator, or an iOS simulator
+
+### Install
 
 ```bash
-npm run reset-project
+git clone https://github.com/Rotberg/my-planner-app.git
+cd my-planner-app
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+No environment variables or database setup are needed. All data is stored on the device, so it doesn't sync between devices and is lost if the app is uninstalled.
 
-## Learn more
+### Run
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npm start          # start the Expo dev server
+npm run android    # open on Android
+npm run ios        # open on iOS
+npm run lint       # run ESLint
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+> **Note:** Step tracking uses native modules (Health Connect), so it doesn't work in Expo Go. Use a development build for the full app:
+>
+> ```bash
+> eas build --profile development --platform android
+> ```
 
-## Join the community
+## Building and releasing
 
-Join our community of developers creating universal apps.
+Build profiles are defined in [`eas.json`](eas.json):
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
-# my-planner-app
+| Profile | Output | Channel |
+|---|---|---|
+| `development` | Dev client, internal distribution | `development` |
+| `preview` | Installable Android APK | `preview` |
+| `production` | Store build, version number goes up automatically | `production` |
+
+```bash
+eas build --profile preview --platform android    # build an APK to share
+eas update --channel preview                      # push an over-the-air JS update
+```
+
+## Project structure
+
+```
+app/                 Expo Router routes
+  (tabs)/            Tasks, Planner, Shopping and Health tabs
+screens/             Full screen components for each tab
+components/          Shared UI (TaskForm, StepsCard, tab bar pieces)
+utils/
+  tasks.ts           Task model, storage, recurrence and notifications
+  steps.ts           Health Connect step tracking
+  notifications.ts   Notification setup
+  storage.js         AsyncStorage helpers
+  localDb.ts         On-device tables for shopping lists, workouts and body stats
+  shoppingHistory.ts Shopping suggestion history
+constants/           Theme colours
+hooks/               Colour scheme hooks
+docs/                Design specs
+```
+
+## Platform notes
+
+- **Step tracking is Android only.** It reads step data from Health Connect, which collects it from Google Fit, Samsung Health, Fitbit and similar apps. The app asks for read access to steps and nothing else. The minimum Android SDK is 26.
+- iOS supports everything except step tracking.

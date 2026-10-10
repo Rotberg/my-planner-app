@@ -1,6 +1,6 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as DocumentPicker from 'expo-document-picker';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Modal,
@@ -14,8 +14,16 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { z } from 'zod';
+import {
+  applyRecords,
+  buildSuggestions,
+  HistoryEntry,
+  loadHistory,
+  mergeHistory,
+  saveHistory,
+} from '../utils/shoppingHistory';
 import { loadData, saveData } from '../utils/storage';
-import { supabase } from '../utils/supabase';
+import { deleteRows, insertRows, selectRows, upsertByName } from '../utils/localDb';
 import { useTheme } from '../utils/theme';
 
 const STORAGE_KEY = 'shopping';
@@ -89,6 +97,10 @@ type SavedListItem = {
 type CatalogItem = { id: string; name: string };
 type FavoriteItem = { id: string; name: string };
 
+function toLocalYMD(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function formatShortDate(iso: string) {
   return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, {
     month: 'short',
@@ -115,6 +127,14 @@ export default function ShoppingScreen() {
   const [expandedListId, setExpandedListId] = useState<string | null>(null);
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [favoriteItems, setFavoriteItems] = useState<FavoriteItem[]>([]);
+  // Names previously added, for suggestions. Local history and saved-list rows
+  // are kept apart and merged on render, so neither overwrites the other.
+  const [localHistory, setLocalHistory] = useState<HistoryEntry[]>([]);
+  const [remoteHistory, setRemoteHistory] = useState<{ name: string; category: string | null }[]>([]);
+  const itemHistory = useMemo(() => mergeHistory(localHistory, remoteHistory), [localHistory, remoteHistory]);
+  // Serialises history updates: each one starts from the result of the last,
+  // and the first waits for the stored history to load.
+  const historyChain = useRef<Promise<HistoryEntry[]> | null>(null);
 
   // UI toggles
   const [showCatalog, setShowCatalog] = useState(false);
@@ -138,40 +158,79 @@ export default function ShoppingScreen() {
     });
     fetchCatalog();
     fetchFavorites();
+    fetchHistory();
   }, []);
 
   useEffect(() => {
     if (view === 'history') fetchSavedLists();
   }, [view]);
 
-  // ─── Supabase fetches ───────────────────────────────────────────────────────
+  // ─── On-device data ─────────────────────────────────────────────────────────
   async function fetchCatalog() {
-    const { data } = await supabase.from('catalog_items').select('id, name').order('name');
-    if (data) setCatalogItems(data);
+    try {
+      setCatalogItems(await selectRows<CatalogItem & { created_at: string }>('catalog_items', { orderBy: 'name' }));
+    } catch (e) {
+      console.error('Failed to load catalog:', e);
+    }
   }
 
   async function fetchFavorites() {
-    const { data } = await supabase.from('favorite_items').select('id, name').order('name');
-    if (data) setFavoriteItems(data);
+    try {
+      setFavoriteItems(await selectRows<FavoriteItem & { created_at: string }>('favorite_items', { orderBy: 'name' }));
+    } catch (e) {
+      console.error('Failed to load favourites:', e);
+    }
+  }
+
+  /** Local add-history plus every item name from saved lists. */
+  async function fetchHistory() {
+    if (!historyChain.current) {
+      historyChain.current = loadHistory().then((local) => {
+        setLocalHistory(local);
+        return local;
+      });
+    }
+    try {
+      const rows = await selectRows('shopping_list_items');
+      setRemoteHistory(rows.map((r) => ({ name: String(r.name), category: r.category ?? null })));
+    } catch (e) {
+      console.error('Failed to load past list items:', e);
+    }
+  }
+
+  function remember(added: { name: string; category?: string }[]) {
+    if (added.length === 0) return;
+    const base = historyChain.current ?? loadHistory();
+    historyChain.current = base.then(async (current) => {
+      const next = applyRecords(current, added);
+      setLocalHistory(next);
+      await saveHistory(next);
+      return next;
+    });
   }
 
   async function fetchSavedLists() {
-    const { data } = await supabase
-      .from('shopping_lists')
-      .select('id, name, created_at, delivery_date')
-      .order('created_at', { ascending: false });
-    if (data) setSavedLists(data);
+    try {
+      setSavedLists(
+        await selectRows<SavedList & { created_at: string }>('shopping_lists', {
+          orderBy: 'created_at',
+          ascending: false,
+        })
+      );
+    } catch (e) {
+      console.error('Failed to load saved lists:', e);
+    }
   }
 
   async function fetchListItems(listId: string) {
-    const { data } = await supabase
-      .from('shopping_list_items')
-      .select('id, name, quantity, checked, category')
-      .eq('list_id', listId);
-    if (data) {
-      setSavedLists((prev) =>
-        prev.map((l) => (l.id === listId ? { ...l, items: data } : l))
+    try {
+      const data = await selectRows<SavedListItem & { created_at: string; list_id: string }>(
+        'shopping_list_items',
+        { where: (r) => r.list_id === listId }
       );
+      setSavedLists((prev) => prev.map((l) => (l.id === listId ? { ...l, items: data } : l)));
+    } catch (e) {
+      console.error('Failed to load list items:', e);
     }
   }
 
@@ -200,6 +259,7 @@ export default function ShoppingScreen() {
       category: parsed.data.category,
     };
     persist([...items, newItem]);
+    remember([{ name: newItem.name, category: newItem.category }]);
     setItemName('');
     setItemQty('');
     setItemCategory(DEFAULT_CATEGORY);
@@ -207,6 +267,7 @@ export default function ShoppingScreen() {
 
   function addFromCatalog(name: string) {
     if (items.some((i) => i.name.toLowerCase() === name.toLowerCase())) return;
+    remember([{ name }]);
     persist([
       ...items,
       {
@@ -222,6 +283,7 @@ export default function ShoppingScreen() {
 
   function addFromFavorites(name: string) {
     if (items.some((i) => i.name.toLowerCase() === name.toLowerCase())) return;
+    remember([{ name }]);
     persist([
       ...items,
       {
@@ -272,7 +334,10 @@ export default function ShoppingScreen() {
         });
       }
 
-      if (newItems.length > 0) persist([...items, ...newItems]);
+      if (newItems.length > 0) {
+        persist([...items, ...newItems]);
+        remember(newItems.map((i) => ({ name: i.name })));
+      }
 
       Alert.alert(
         'Import complete',
@@ -292,10 +357,15 @@ export default function ShoppingScreen() {
   async function toggleFavorite(item: ShoppingItem) {
     const nowFavorited = !item.favorited;
     persist(items.map((i) => (i.id === item.id ? { ...i, favorited: nowFavorited } : i)));
-    if (nowFavorited) {
-      await supabase.from('favorite_items').upsert({ name: item.name }, { onConflict: 'name' });
-    } else {
-      await supabase.from('favorite_items').delete().eq('name', item.name);
+    try {
+      if (nowFavorited) {
+        await upsertByName('favorite_items', item.name);
+      } else {
+        const key = item.name.trim().toLowerCase();
+        await deleteRows('favorite_items', (r) => String(r.name).trim().toLowerCase() === key);
+      }
+    } catch (e) {
+      console.error('Failed to update favourites:', e);
     }
     fetchFavorites();
   }
@@ -360,42 +430,23 @@ export default function ShoppingScreen() {
       day: 'numeric',
       year: 'numeric',
     });
-    const { data: list, error } = await supabase
-      .from('shopping_lists')
-      .insert({
-        name,
-        delivery_date: deliveryDate ? deliveryDate.toISOString().split('T')[0] : null,
-      })
-      .select()
-      .single();
-
-    if (error || !list) {
-      console.error('[shopping] save list failed', error);
-      Alert.alert(
-        'Could not save list',
-        error
-          ? `${error.message}${error.code ? ` (code ${error.code})` : ''}${error.hint ? `\n\nHint: ${error.hint}` : ''}`
-          : 'No data returned from server.',
+    try {
+      const [list] = await insertRows('shopping_lists', [
+        { name, delivery_date: deliveryDate ? toLocalYMD(deliveryDate) : null },
+      ]);
+      await insertRows(
+        'shopping_list_items',
+        items.map((i) => ({
+          list_id: list.id,
+          name: i.name,
+          quantity: i.quantity || null,
+          checked: i.checked,
+          category: i.category,
+        }))
       );
-      return;
-    }
-
-    const { error: itemsError } = await supabase.from('shopping_list_items').insert(
-      items.map((i) => ({
-        list_id: list.id,
-        name: i.name,
-        quantity: i.quantity || null,
-        checked: i.checked,
-        category: i.category,
-      }))
-    );
-
-    if (itemsError) {
-      console.error('[shopping] save items failed', itemsError);
-      Alert.alert(
-        'List saved, but items failed',
-        `${itemsError.message}${itemsError.code ? ` (code ${itemsError.code})` : ''}${itemsError.hint ? `\n\nHint: ${itemsError.hint}` : ''}`,
-      );
+    } catch (e) {
+      console.error('[shopping] save list failed', e);
+      Alert.alert('Could not save list', 'Saving to this device failed. Please try again.');
       return;
     }
 
@@ -410,9 +461,13 @@ export default function ShoppingScreen() {
       Alert.alert('Invalid name', parsed.error.issues[0]?.message ?? 'Please check the name.');
       return;
     }
-    await supabase
-      .from('catalog_items')
-      .upsert({ name: parsed.data }, { onConflict: 'name' });
+    try {
+      await upsertByName('catalog_items', parsed.data);
+    } catch (e) {
+      console.error('Failed to add to catalog:', e);
+      Alert.alert('Could not add item', 'Saving to this device failed. Please try again.');
+      return;
+    }
     setNewCatalogName('');
     fetchCatalog();
   }
@@ -424,7 +479,7 @@ export default function ShoppingScreen() {
         text: 'Remove',
         style: 'destructive',
         onPress: async () => {
-          await supabase.from('catalog_items').delete().eq('id', item.id);
+          await deleteRows('catalog_items', (r) => r.id === item.id);
           fetchCatalog();
         },
       },
@@ -439,7 +494,7 @@ export default function ShoppingScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          await supabase.from('shopping_lists').delete().eq('id', id);
+          await deleteRows('shopping_lists', (r) => r.id === id);
           setSavedLists((prev) => prev.filter((l) => l.id !== id));
         },
       },
@@ -523,7 +578,7 @@ export default function ShoppingScreen() {
                   >
                     <View className="flex-1">
                       <Text className="text-[15px] font-semibold text-stone-800 dark:text-stone-100">
-                        {formatShortDate(list.created_at.split('T')[0])}
+                        {formatShortDate(toLocalYMD(new Date(list.created_at)))}
                       </Text>
                       {list.delivery_date && (
                         <Text className="text-xs text-teal-700 mt-0.5">
@@ -662,29 +717,12 @@ export default function ShoppingScreen() {
 
           {/* Item name with autocomplete */}
           {(() => {
-            const nameLower = itemName.toLowerCase().trim();
-            const suggestions: Array<{ name: string; isFavorite: boolean }> =
-              nameLower.length === 0
-                ? []
-                : [
-                    ...catalogItems
-                      .filter(
-                        (c) =>
-                          c.name.toLowerCase().includes(nameLower) &&
-                          c.name.toLowerCase() !== nameLower
-                      )
-                      .map((c) => ({ name: c.name, isFavorite: false })),
-                    ...favoriteItems
-                      .filter(
-                        (f) =>
-                          f.name.toLowerCase().includes(nameLower) &&
-                          f.name.toLowerCase() !== nameLower &&
-                          !catalogItems.some(
-                            (c) => c.name.toLowerCase() === f.name.toLowerCase()
-                          )
-                      )
-                      .map((f) => ({ name: f.name, isFavorite: true })),
-                  ];
+            const suggestions = buildSuggestions(itemName, {
+              favourites: favoriteItems.map((f) => f.name),
+              history: itemHistory,
+              catalog: catalogItems.map((c) => c.name),
+              exclude: items.map((i) => i.name),
+            });
             return (
               <View className="mb-3">
                 <TextInput
@@ -705,12 +743,15 @@ export default function ShoppingScreen() {
                         className={`flex-row items-center px-3 py-2.5 ${
                           index > 0 ? 'border-t border-stone-100 dark:border-stone-700' : ''
                         }`}
-                        onPress={() => setItemName(s.name)}
+                        onPress={() => {
+                          setItemName(s.name);
+                          if (s.category) setItemCategory(normalizeCategory(s.category));
+                        }}
                       >
-                        {s.isFavorite && <Text className="text-amber-500 mr-2 text-sm">★</Text>}
+                        {s.source === 'favourite' && <Text className="text-amber-500 mr-2 text-sm">★</Text>}
                         <Text className="text-[14px] text-stone-700 dark:text-stone-200 flex-1">{s.name}</Text>
                         <Text className="text-[11px] text-stone-400 dark:text-stone-500">
-                          {s.isFavorite ? 'favourite' : 'catalog'}
+                          {s.source === 'history' ? 'previous' : s.source}
                         </Text>
                       </TouchableOpacity>
                     ))}
