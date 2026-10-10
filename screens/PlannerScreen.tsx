@@ -4,7 +4,7 @@ import { Alert, ScrollView, Text, TouchableOpacity, View, useColorScheme } from 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import TaskForm from '../components/TaskForm';
 import { loadData, saveData } from '../utils/storage';
-import { supabase } from '../utils/supabase';
+import { selectRows } from '../utils/localDb';
 import {
   DatedTask,
   formatTimeRange,
@@ -137,8 +137,8 @@ export default function PlannerScreen() {
     });
   }, []);
 
-  // Refresh remote data each time the planner is focused, so changes made in
-  // the Health screen show up here. (Tasks reload via useTasks.)
+  // Refresh workouts and stats each time the planner is focused, so changes made
+  // in the Health screen show up here. (Tasks reload via useTasks.)
   useFocusEffect(
     useCallback(() => {
       loadData(HEIGHT_STORAGE_KEY).then((stored) => {
@@ -151,30 +151,34 @@ export default function PlannerScreen() {
   );
 
   async function fetchSessions() {
-    const { data, error } = await supabase
-      .from('workout_sessions')
-      .select('id, name, performed_at, workout_session_exercises(count)')
-      .order('performed_at', { ascending: false });
-    if (error) console.error('Failed to load workout sessions:', error.message);
-    if (data) {
+    try {
+      const [rows, exercises] = await Promise.all([
+        selectRows('workout_sessions', { orderBy: 'performed_at', ascending: false }),
+        selectRows('workout_session_exercises'),
+      ]);
+      const counts = new Map<string, number>();
+      for (const e of exercises) counts.set(e.session_id, (counts.get(e.session_id) ?? 0) + 1);
       setSessions(
-        data.map((s: any) => ({
+        rows.map((s) => ({
           id: s.id,
-          name: s.name,
+          name: s.name ?? null,
           performed_at: s.performed_at,
-          exercise_count: s.workout_session_exercises?.[0]?.count ?? 0,
+          exercise_count: counts.get(s.id) ?? 0,
         }))
       );
+    } catch (e) {
+      console.error('Failed to load workout sessions:', e);
     }
   }
 
   async function fetchHealthStats() {
-    const { data, error } = await supabase
-      .from('health_stats')
-      .select('id, recorded_at, weight, waist, chest, hips, arms, thighs, notes')
-      .order('recorded_at', { ascending: false });
-    if (error) console.error('Failed to load health stats:', error.message);
-    if (data) setHealthStats(data as HealthStatRow[]);
+    try {
+      setHealthStats(
+        (await selectRows('health_stats', { orderBy: 'recorded_at', ascending: false })) as unknown as HealthStatRow[]
+      );
+    } catch (e) {
+      console.error('Failed to load health stats:', e);
+    }
   }
 
   function toggleFilter(key: FilterKey) {

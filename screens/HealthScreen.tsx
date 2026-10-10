@@ -15,7 +15,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { z } from 'zod';
 import StepsCard from '../components/StepsCard';
 import { loadData, saveData } from '../utils/storage';
-import { supabase } from '../utils/supabase';
+import { deleteRows, insertRows, selectRows, upsertByName } from '../utils/localDb';
+import { toYMD } from '../utils/tasks';
 import { useTheme } from '../utils/theme';
 
 const STORAGE_KEY = 'health_workout_current';
@@ -245,13 +246,13 @@ export default function HealthScreen() {
     if (view === 'workout') fetchSessionHistory();
   }, [view]);
 
-  // ─── Supabase: stats ─────────────────────────────────────────────────────
+  // ─── Stats (on-device) ───────────────────────────────────────────────────
   async function fetchStatHistory() {
-    const { data } = await supabase
-      .from('health_stats')
-      .select('id, recorded_at, weight, waist, chest, hips, arms, thighs, notes')
-      .order('recorded_at', { ascending: false });
-    if (data) setStatHistory(data as HealthStat[]);
+    const data = await selectRows<HealthStat & { created_at: string }>('health_stats', {
+      orderBy: 'recorded_at',
+      ascending: false,
+    });
+    setStatHistory(data);
   }
 
   async function saveStatEntry() {
@@ -262,7 +263,7 @@ export default function HealthScreen() {
     }
     const toNum = (s: string) => (s === '' ? null : Number(s));
     const payload = {
-      recorded_at: statDate.toISOString().split('T')[0],
+      recorded_at: toYMD(statDate),
       weight: toNum(parsed.data.weight),
       waist:  toNum(parsed.data.waist),
       chest:  toNum(parsed.data.chest),
@@ -271,9 +272,11 @@ export default function HealthScreen() {
       thighs: toNum(parsed.data.thighs),
       notes: statNotes.trim() || null,
     };
-    const { error } = await supabase.from('health_stats').insert(payload);
-    if (error) {
-      Alert.alert('Error', 'Could not save entry. Check your connection.');
+    try {
+      await insertRows('health_stats', [payload]);
+    } catch (e) {
+      console.error('Failed to save health stats:', e);
+      Alert.alert('Error', 'Could not save entry. Your device storage may be full.');
       return;
     }
     setStatForm({ weight: '', waist: '', chest: '', hips: '', arms: '', thighs: '' });
@@ -291,59 +294,47 @@ export default function HealthScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          await supabase.from('health_stats').delete().eq('id', id);
+          await deleteRows('health_stats', (r) => r.id === id);
           setStatHistory((prev) => prev.filter((s) => s.id !== id));
         },
       },
     ]);
   }
 
-  // ─── Supabase: routines & catalog ────────────────────────────────────────
+  // ─── Routines & catalog (on-device) ──────────────────────────────────────
   async function fetchExerciseCatalog() {
-    const { data } = await supabase.from('exercise_catalog').select('id, name').order('name');
-    if (data) setExerciseCatalog(data);
+    const data = await selectRows<CatalogExercise & { created_at: string }>('exercise_catalog', { orderBy: 'name' });
+    setExerciseCatalog(data);
   }
 
   async function fetchSavedRoutines() {
-    const { data } = await supabase
-      .from('workout_routines')
-      .select('id, name, created_at')
-      .order('created_at', { ascending: false });
-    if (data) setSavedRoutines(data);
+    const data = await selectRows<any>('workout_routines', { orderBy: 'created_at', ascending: false });
+    setSavedRoutines(data);
   }
 
   async function fetchRoutineExercises(routineId: string) {
-    const { data } = await supabase
-      .from('workout_routine_exercises')
-      .select('id, name, sets, reps, weight, notes, position')
-      .eq('routine_id', routineId)
-      .order('position', { ascending: true });
-    if (data) {
-      setSavedRoutines((prev) =>
-        prev.map((r) => (r.id === routineId ? { ...r, exercises: data } : r))
-      );
-    }
+    const data = await selectRows<any>('workout_routine_exercises', {
+      where: (r) => r.routine_id === routineId,
+      orderBy: 'position',
+    });
+    setSavedRoutines((prev) =>
+      prev.map((r) => (r.id === routineId ? { ...r, exercises: data } : r))
+    );
   }
 
   async function fetchSessionHistory() {
-    const { data } = await supabase
-      .from('workout_sessions')
-      .select('id, name, performed_at, notes, created_at')
-      .order('performed_at', { ascending: false });
-    if (data) setSessionHistory(data as WorkoutSession[]);
+    const data = await selectRows<any>('workout_sessions', { orderBy: 'performed_at', ascending: false });
+    setSessionHistory(data as WorkoutSession[]);
   }
 
   async function fetchSessionExercises(sessionId: string) {
-    const { data } = await supabase
-      .from('workout_session_exercises')
-      .select('id, name, sets, reps, weight, notes, position')
-      .eq('session_id', sessionId)
-      .order('position', { ascending: true });
-    if (data) {
-      setSessionHistory((prev) =>
-        prev.map((s) => (s.id === sessionId ? { ...s, exercises: data } : s))
-      );
-    }
+    const data = await selectRows<any>('workout_session_exercises', {
+      where: (r) => r.session_id === sessionId,
+      orderBy: 'position',
+    });
+    setSessionHistory((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, exercises: data } : s))
+    );
   }
 
   function confirmDeleteSession(id: string) {
@@ -353,7 +344,7 @@ export default function HealthScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          await supabase.from('workout_sessions').delete().eq('id', id);
+          await deleteRows('workout_sessions', (r) => r.id === id);
           setSessionHistory((prev) => prev.filter((s) => s.id !== id));
         },
       },
@@ -479,28 +470,25 @@ export default function HealthScreen() {
       return;
     }
 
-    const { data: routine, error } = await supabase
-      .from('workout_routines')
-      .insert({ name: parsed.data })
-      .select()
-      .single();
-
-    if (error || !routine) {
-      Alert.alert('Error', 'Could not save routine. Check your connection.');
+    try {
+      const [routine] = await insertRows('workout_routines', [{ name: parsed.data }]);
+      await insertRows(
+        'workout_routine_exercises',
+        exercises.map((e, idx) => ({
+          routine_id: routine.id,
+          name: e.name,
+          sets: e.sets || null,
+          reps: e.reps || null,
+          weight: e.weight || null,
+          notes: e.notes || null,
+          position: idx,
+        }))
+      );
+    } catch (e) {
+      console.error('Failed to save routine:', e);
+      Alert.alert('Error', 'Could not save routine. Your device storage may be full.');
       return;
     }
-
-    await supabase.from('workout_routine_exercises').insert(
-      exercises.map((e, idx) => ({
-        routine_id: routine.id,
-        name: e.name,
-        sets: e.sets || null,
-        reps: e.reps || null,
-        weight: e.weight || null,
-        notes: e.notes || null,
-        position: idx,
-      }))
-    );
 
     setShowSaveModal(false);
     setRoutineName('');
@@ -516,31 +504,27 @@ export default function HealthScreen() {
 
     const name = sessionName.trim() || null;
 
-    const { data: session, error } = await supabase
-      .from('workout_sessions')
-      .insert({
-        name,
-        performed_at: sessionDate.toISOString().split('T')[0],
-      })
-      .select()
-      .single();
-
-    if (error || !session) {
-      Alert.alert('Error', 'Could not save workout. Check your connection.');
+    try {
+      const [session] = await insertRows('workout_sessions', [
+        { name, performed_at: toYMD(sessionDate), notes: null },
+      ]);
+      await insertRows(
+        'workout_session_exercises',
+        exercises.map((e, idx) => ({
+          session_id: session.id,
+          name: e.name,
+          sets: e.sets || null,
+          reps: e.reps || null,
+          weight: e.weight || null,
+          notes: e.notes || null,
+          position: idx,
+        }))
+      );
+    } catch (e) {
+      console.error('Failed to save workout:', e);
+      Alert.alert('Error', 'Could not save workout. Your device storage may be full.');
       return;
     }
-
-    await supabase.from('workout_session_exercises').insert(
-      exercises.map((e, idx) => ({
-        session_id: session.id,
-        name: e.name,
-        sets: e.sets || null,
-        reps: e.reps || null,
-        weight: e.weight || null,
-        notes: e.notes || null,
-        position: idx,
-      }))
-    );
 
     setShowSessionModal(false);
     setSessionName('');
@@ -568,9 +552,7 @@ export default function HealthScreen() {
       Alert.alert('Invalid name', parsed.error.issues[0]?.message ?? 'Please check the name.');
       return;
     }
-    await supabase
-      .from('exercise_catalog')
-      .upsert({ name: parsed.data }, { onConflict: 'name' });
+    await upsertByName('exercise_catalog', parsed.data);
     setNewCatalogName('');
     fetchExerciseCatalog();
   }
@@ -582,7 +564,7 @@ export default function HealthScreen() {
         text: 'Remove',
         style: 'destructive',
         onPress: async () => {
-          await supabase.from('exercise_catalog').delete().eq('id', item.id);
+          await deleteRows('exercise_catalog', (r) => r.id === item.id);
           fetchExerciseCatalog();
         },
       },
@@ -597,7 +579,7 @@ export default function HealthScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          await supabase.from('workout_routines').delete().eq('id', id);
+          await deleteRows('workout_routines', (r) => r.id === id);
           setSavedRoutines((prev) => prev.filter((r) => r.id !== id));
         },
       },

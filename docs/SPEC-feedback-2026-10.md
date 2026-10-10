@@ -161,13 +161,9 @@ Typed item names never feed the suggestion source. Suggestions only read the cur
 - Remember the category last used for each name, and pre-select it when a suggestion is tapped.
 - Log or surface Supabase errors in the fetch functions instead of discarding them, so an RLS or env problem is visible.
 
-### 4.3 Supabase project is unreachable (found 2026-10-10)
+### 4.3 Supabase removed (2026-10-10)
 
-The project hostname in `.env.local` does not resolve in DNS, while other sites do. Every Supabase call fails: catalog, favourites, saved lists, workouts and health stats. This alone stops catalog and favourite suggestions. The project is probably paused or deleted. Restore it from the Supabase dashboard, or point the env vars at a new project and re-run `sql/general.sql`.
-
-### 4.4 Verify
-
-Check in the Supabase dashboard that `catalog_items` and `favorite_items` either have RLS off or have a `select` policy for the anon role. An RLS-blocked select returns an empty array with no error, which would produce exactly this symptom.
+The Supabase project stopped resolving, which broke every remote feature. All data now lives on the device in `utils/localDb.ts`, so suggestions no longer depend on a server.
 
 ---
 
@@ -193,7 +189,7 @@ Proposed feature:
 
 - Health tab: "Steps today" card with a goal ring (default 10,000, editable) and a 7-day bar chart.
 - Planner: daily step total as an optional item under the Health filter.
-- Read-only. No step data stored in Supabase unless history beyond Health Connect's retention is wanted.
+- Read-only. Step data is not stored by the app; Health Connect keeps the history.
 
 Estimate: roughly 1–2 days including the build and permissions flow.
 
