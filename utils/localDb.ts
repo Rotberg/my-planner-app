@@ -55,7 +55,8 @@ export function newId() {
 
 // ─── Corruption recovery ─────────────────────────────────────────────────────
 
-type CorruptionListener = (label: string, backupKey: string) => void;
+/** `backupKey` is null when the backup couldn't be saved (e.g. storage full). */
+type CorruptionListener = (label: string, backupKey: string | null) => void;
 const corruptionListeners = new Set<CorruptionListener>();
 
 /** Called when a table had to be reset because its stored value was unreadable. */
@@ -73,14 +74,24 @@ export function onTableRecovered(listener: CorruptionListener) {
  * can't be deleted and the user isn't alerted twice.
  */
 export async function quarantineKey(key: string, label: string, raw: string) {
-  const backupKey = `${key}:corrupt:${Date.now()}`;
+  const prefix = `${key}:corrupt:`;
+  // Keep only the newest backup per key, so repeated corruption (often caused
+  // by a full disk) doesn't pile up full copies.
+  try {
+    const old = (await AsyncStorage.getAllKeys()).filter((k) => k.startsWith(prefix));
+    if (old.length > 0) await AsyncStorage.multiRemove(old);
+  } catch {
+    // ignore
+  }
+  let backupKey: string | null = `${prefix}${Date.now()}`;
   try {
     await AsyncStorage.setItem(backupKey, raw);
   } catch {
-    // Keeping the app usable matters more than the backup.
+    // Keeping the app usable matters more than the backup, but don't claim one exists.
+    backupKey = null;
   }
   await AsyncStorage.removeItem(key);
-  console.warn(`[localDb] ${label} was unreadable; reset it and kept a copy at ${backupKey}`);
+  console.warn(`[localDb] ${label} was unreadable and was reset. Backup: ${backupKey ?? 'could not be saved'}`);
   corruptionListeners.forEach((l) => l(label, backupKey));
 }
 
@@ -156,8 +167,9 @@ type Tables = Partial<Record<TableName, Row[]>>;
 /** Reads `tables`, applies `fn`, and saves every changed table in one multiSet. */
 function mutateMany<T>(tables: TableName[], fn: (current: Tables) => { changed: Tables; result: T }): Promise<T> {
   return enqueueWrite(tables, async () => {
+    const rows = await Promise.all(tables.map((t) => readLocked(t)));
     const current: Tables = {};
-    for (const t of tables) current[t] = await readLocked(t);
+    tables.forEach((t, i) => (current[t] = rows[i]));
     const { changed, result } = fn(current);
     const entries = (Object.keys(changed) as TableName[]).map(
       (t) => [storageKey(t), JSON.stringify(changed[t])] as [string, string]
@@ -252,6 +264,19 @@ export function upsertByName(table: TableName, name: string): Promise<void> {
       rows: [...current, { id: newId(), name: name.trim(), created_at: new Date().toISOString() }],
       result: undefined,
     };
+  });
+}
+
+/** Applies `patch` to matching rows. */
+export function updateRows(table: TableName, where: (row: Row) => boolean, patch: (row: Row) => Partial<Row>) {
+  return mutate(table, (current) => {
+    let changed = false;
+    const rows = current.map((r) => {
+      if (!where(r)) return r;
+      changed = true;
+      return { ...r, ...patch(r) };
+    });
+    return { rows: changed ? rows : current, result: undefined };
   });
 }
 

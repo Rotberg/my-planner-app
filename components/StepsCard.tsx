@@ -44,7 +44,8 @@ export default function StepsCard() {
   /** `fresh` waits for any refresh already running, then always starts a new one. */
   const refresh = useCallback((fresh = false): Promise<void> => {
     if (fresh && inFlight.current) {
-      return inFlight.current.then(() => refresh(true));
+      // A failed earlier run must not stop the fresh check.
+      return inFlight.current.catch(() => {}).then(() => refresh(true));
     }
     if (!inFlight.current) {
       inFlight.current = (async () => {
@@ -58,9 +59,11 @@ export default function StepsCard() {
           console.warn('Failed to read steps:', e);
           setError('Could not read steps from Health Connect.');
         }
-      })().finally(() => {
-        inFlight.current = null;
-      });
+      })()
+        .catch((e) => console.warn('Steps refresh failed:', e))
+        .finally(() => {
+          inFlight.current = null;
+        });
     }
     return inFlight.current;
   }, []);

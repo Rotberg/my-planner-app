@@ -407,26 +407,6 @@ async function commitChange(change: Change): Promise<Task[]> {
   }
 }
 
-/**
- * The upcoming instances a repeating task created (following `nextId`), that
- * aren't done yet. Used to delete a whole series.
- */
-function undoneSuccessors(tasks: Task[], task: Task): Task[] {
-  // A completed instance is history: deleting it must not end the series.
-  if (task.done) return [];
-  const out: Task[] = [];
-  const seen = new Set<string>([task.id]);
-  let nextId = task.nextId;
-  while (nextId && !seen.has(nextId)) {
-    seen.add(nextId);
-    const next = tasks.find((t) => t.id === nextId);
-    if (!next) break;
-    if (!next.done) out.push(next);
-    nextId = next.nextId;
-  }
-  return out;
-}
-
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 /**
@@ -443,14 +423,21 @@ export function useTasks() {
   const mutate = useCallback(
     (fn: (current: Task[]) => Change | null): Promise<boolean> =>
       enqueue(async () => {
+        let stage: 'read' | 'write' = 'read';
         try {
           const current = await loadTasks();
           const change = fn(current);
+          stage = 'write';
           setTasks(change ? await commitChange(change) : current);
           return true;
         } catch (e) {
-          console.error('Task save failed:', e);
-          Alert.alert('Could not save', 'Your change was not saved. Your device storage may be full.');
+          console.error(`Task ${stage} failed:`, e);
+          Alert.alert(
+            'Could not save',
+            stage === 'write'
+              ? 'Your change was not saved. Your device storage may be full.'
+              : 'Your change was not saved because your tasks could not be read. Please try again.'
+          );
           try {
             setTasks(await loadTasks());
           } catch {
@@ -517,17 +504,17 @@ export function useTasks() {
   );
 
   /**
-   * Deletes a task. For a repeating task this also deletes the upcoming
-   * instances it created, so the series stops. Completed instances are kept.
+   * Deletes one task. A repeating series only ever has one live (undone)
+   * instance, and future repeats are projected from it, so deleting the live
+   * instance ends the series. Deleting a completed instance removes only that
+   * history entry.
    */
   const deleteTask = useCallback(
     (id: string) =>
       mutate((current) => {
         const existing = current.find((t) => t.id === id);
         if (!existing) return null;
-        const doomed = [existing, ...(existing.recurrence !== 'none' ? undoneSuccessors(current, existing) : [])];
-        const ids = new Set(doomed.map((t) => t.id));
-        return { next: current.filter((t) => !ids.has(t.id)), cancel: doomed };
+        return { next: current.filter((t) => t.id !== id), cancel: [existing] };
       }),
     [mutate]
   );

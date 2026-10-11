@@ -4,7 +4,7 @@ import { Alert, ScrollView, Text, TouchableOpacity, View, useColorScheme } from 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import TaskForm from '../components/TaskForm';
 import { loadData, saveData } from '../utils/storage';
-import { Row, selectRows } from '../utils/localDb';
+import { Row, selectRows, updateRows } from '../utils/localDb';
 import {
   DatedTask,
   formatTimeRange,
@@ -156,9 +156,17 @@ export default function PlannerScreen() {
       const rows = await selectRows<SessionRow>('workout_sessions', { orderBy: 'performed_at', ascending: false });
       // New sessions store their count. Only older ones need the exercise table read.
       const counts = new Map<string, number>();
-      if (rows.some((s) => typeof s.exercise_count !== 'number')) {
+      const legacy = rows.filter((s) => typeof s.exercise_count !== 'number');
+      if (legacy.length > 0) {
         const exercises = await selectRows<Row & { session_id: string }>('workout_session_exercises');
         for (const e of exercises) counts.set(e.session_id, (counts.get(e.session_id) ?? 0) + 1);
+        // Store the counts once, so later visits don't read every exercise again.
+        const legacyIds = new Set(legacy.map((s) => s.id));
+        updateRows(
+          'workout_sessions',
+          (r) => legacyIds.has(r.id) && typeof r.exercise_count !== 'number',
+          (r) => ({ exercise_count: counts.get(r.id) ?? 0 })
+        ).catch((e) => console.warn('Could not store workout counts:', e));
       }
       setSessions(
         rows.map((s) => ({
@@ -572,7 +580,14 @@ export default function PlannerScreen() {
         is24Hour={is24Hour}
         onToggle24Hour={toggle24Hour}
         onSubmit={handleSubmit}
-        onDelete={editing ? () => { deleteTask(editing.id); setFormOpen(false); } : undefined}
+        onDelete={
+          editing
+            ? async () => {
+                // On failure the hook has shown an alert; keep the form open to retry.
+                if (await deleteTask(editing.id)) setFormOpen(false);
+              }
+            : undefined
+        }
         onClose={() => setFormOpen(false)}
       />
     </SafeAreaView>

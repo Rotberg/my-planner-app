@@ -25,10 +25,11 @@ export default function RootLayout() {
   // Tell the user if stored data was unreadable and had to be reset.
   useEffect(
     () =>
-      onTableRecovered((table) => {
+      onTableRecovered((label, backupKey) => {
         Alert.alert(
           'Some data could not be read',
-          `Saved ${table.replace(/_/g, ' ')} were damaged and have been reset. A backup copy was kept on this device.`
+          `Saved ${label} were damaged and have been reset.` +
+            (backupKey ? ' A backup copy was kept on this device.' : ' A backup could not be saved.')
         );
       }),
     []

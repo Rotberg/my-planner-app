@@ -213,7 +213,14 @@ export default function TasksScreen() {
         is24Hour={is24Hour}
         onToggle24Hour={toggle24Hour}
         onSubmit={handleSubmit}
-        onDelete={editing ? () => { deleteTask(editing.id); setFormOpen(false); } : undefined}
+        onDelete={
+          editing
+            ? async () => {
+                // On failure the hook has shown an alert; keep the form open to retry.
+                if (await deleteTask(editing.id)) setFormOpen(false);
+              }
+            : undefined
+        }
         onClose={() => setFormOpen(false)}
       />
     </SafeAreaView>

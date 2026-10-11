@@ -112,6 +112,11 @@ export default function ShoppingScreen() {
 
   // Current list state (AsyncStorage)
   const [items, setItems] = useState<ShoppingItem[]>([]);
+  // Latest list, for async handlers that must not act on a stale snapshot.
+  const itemsRef = useRef<ShoppingItem[]>([]);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
   const [itemName, setItemName] = useState('');
   const [itemQty, setItemQty] = useState('');
   const [itemCategory, setItemCategory] = useState<Category>(DEFAULT_CATEGORY);
@@ -234,6 +239,7 @@ export default function ShoppingScreen() {
 
   // ─── Current list helpers ───────────────────────────────────────────────────
   async function persist(updated: ShoppingItem[]) {
+    itemsRef.current = updated;
     setItems(updated);
     await saveData(STORAGE_KEY, updated);
   }
@@ -366,11 +372,7 @@ export default function ShoppingScreen() {
       console.error('Failed to update favourites:', e);
       // Roll back against the latest list, not the snapshot from before the
       // await, so changes made in the meantime aren't lost.
-      setItems((latest) => {
-        const reverted = latest.map((i) => (i.id === item.id ? { ...i, favorited: !nowFavorited } : i));
-        saveData(STORAGE_KEY, reverted);
-        return reverted;
-      });
+      persist(itemsRef.current.map((i) => (i.id === item.id ? { ...i, favorited: !nowFavorited } : i)));
       Alert.alert('Could not update favourites', 'Saving to this device failed. Please try again.');
     }
     fetchFavorites();
