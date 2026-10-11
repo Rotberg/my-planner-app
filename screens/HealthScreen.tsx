@@ -15,8 +15,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { z } from 'zod';
 import StepsCard from '../components/StepsCard';
 import { loadData, saveData } from '../utils/storage';
-import { deleteRows, insertRows, selectRows, upsertByName } from '../utils/localDb';
-import { toYMD } from '../utils/tasks';
+import { deleteRows, insertRows, insertWithChildren, Row, selectRows, upsertByName } from '../utils/localDb';
+import { toYMD } from '../utils/dates';
 import { useTheme } from '../utils/theme';
 
 const STORAGE_KEY = 'health_workout_current';
@@ -121,8 +121,21 @@ type WorkoutSession = {
   performed_at: string;
   notes: string | null;
   created_at: string;
+  /** Stored when saved, so the Planner can show counts without reading every exercise. */
+  exercise_count?: number;
   exercises?: SavedRoutineExercise[];
 };
+
+/** Row shapes as stored (without the client-only `exercises` field). */
+type RoutineRow = Omit<SavedRoutine, 'exercises'> & Row;
+type SessionRow = Omit<WorkoutSession, 'exercises'> & Row;
+type ExerciseRow = SavedRoutineExercise & Row;
+
+/** Shows a consistent message when on-device storage fails. */
+function storageFailed(action: string, e: unknown) {
+  console.error(`Failed to ${action}:`, e);
+  Alert.alert('Something went wrong', `Could not ${action}. Please try again.`);
+}
 
 type CatalogExercise = { id: string; name: string };
 
@@ -248,11 +261,13 @@ export default function HealthScreen() {
 
   // ─── Stats (on-device) ───────────────────────────────────────────────────
   async function fetchStatHistory() {
-    const data = await selectRows<HealthStat & { created_at: string }>('health_stats', {
-      orderBy: 'recorded_at',
-      ascending: false,
-    });
-    setStatHistory(data);
+    try {
+      setStatHistory(
+        await selectRows<HealthStat & Row>('health_stats', { orderBy: 'recorded_at', ascending: false })
+      );
+    } catch (e) {
+      console.error('Failed to load body stats:', e);
+    }
   }
 
   async function saveStatEntry() {
@@ -275,8 +290,7 @@ export default function HealthScreen() {
     try {
       await insertRows('health_stats', [payload]);
     } catch (e) {
-      console.error('Failed to save health stats:', e);
-      Alert.alert('Error', 'Could not save entry. Your device storage may be full.');
+      storageFailed('save this entry', e);
       return;
     }
     setStatForm({ weight: '', waist: '', chest: '', hips: '', arms: '', thighs: '' });
@@ -294,8 +308,12 @@ export default function HealthScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          await deleteRows('health_stats', (r) => r.id === id);
-          setStatHistory((prev) => prev.filter((s) => s.id !== id));
+          try {
+            await deleteRows('health_stats', (r) => r.id === id);
+            setStatHistory((prev) => prev.filter((s) => s.id !== id));
+          } catch (e) {
+            storageFailed('delete this entry', e);
+          }
         },
       },
     ]);
@@ -303,38 +321,51 @@ export default function HealthScreen() {
 
   // ─── Routines & catalog (on-device) ──────────────────────────────────────
   async function fetchExerciseCatalog() {
-    const data = await selectRows<CatalogExercise & { created_at: string }>('exercise_catalog', { orderBy: 'name' });
-    setExerciseCatalog(data);
+    try {
+      setExerciseCatalog(await selectRows<CatalogExercise & Row>('exercise_catalog', { orderBy: 'name' }));
+    } catch (e) {
+      console.error('Failed to load exercise catalog:', e);
+    }
   }
 
   async function fetchSavedRoutines() {
-    const data = await selectRows<any>('workout_routines', { orderBy: 'created_at', ascending: false });
-    setSavedRoutines(data);
+    try {
+      setSavedRoutines(await selectRows<RoutineRow>('workout_routines', { orderBy: 'created_at', ascending: false }));
+    } catch (e) {
+      console.error('Failed to load routines:', e);
+    }
   }
 
   async function fetchRoutineExercises(routineId: string) {
-    const data = await selectRows<any>('workout_routine_exercises', {
-      where: (r) => r.routine_id === routineId,
-      orderBy: 'position',
-    });
-    setSavedRoutines((prev) =>
-      prev.map((r) => (r.id === routineId ? { ...r, exercises: data } : r))
-    );
+    try {
+      const data = await selectRows<ExerciseRow>('workout_routine_exercises', {
+        where: (r) => r.routine_id === routineId,
+        orderBy: 'position',
+      });
+      setSavedRoutines((prev) => prev.map((r) => (r.id === routineId ? { ...r, exercises: data } : r)));
+    } catch (e) {
+      console.error('Failed to load routine exercises:', e);
+    }
   }
 
   async function fetchSessionHistory() {
-    const data = await selectRows<any>('workout_sessions', { orderBy: 'performed_at', ascending: false });
-    setSessionHistory(data as WorkoutSession[]);
+    try {
+      setSessionHistory(await selectRows<SessionRow>('workout_sessions', { orderBy: 'performed_at', ascending: false }));
+    } catch (e) {
+      console.error('Failed to load workout history:', e);
+    }
   }
 
   async function fetchSessionExercises(sessionId: string) {
-    const data = await selectRows<any>('workout_session_exercises', {
-      where: (r) => r.session_id === sessionId,
-      orderBy: 'position',
-    });
-    setSessionHistory((prev) =>
-      prev.map((s) => (s.id === sessionId ? { ...s, exercises: data } : s))
-    );
+    try {
+      const data = await selectRows<ExerciseRow>('workout_session_exercises', {
+        where: (r) => r.session_id === sessionId,
+        orderBy: 'position',
+      });
+      setSessionHistory((prev) => prev.map((s) => (s.id === sessionId ? { ...s, exercises: data } : s)));
+    } catch (e) {
+      console.error('Failed to load workout exercises:', e);
+    }
   }
 
   function confirmDeleteSession(id: string) {
@@ -344,8 +375,12 @@ export default function HealthScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          await deleteRows('workout_sessions', (r) => r.id === id);
-          setSessionHistory((prev) => prev.filter((s) => s.id !== id));
+          try {
+            await deleteRows('workout_sessions', (r) => r.id === id);
+            setSessionHistory((prev) => prev.filter((s) => s.id !== id));
+          } catch (e) {
+            storageFailed('delete this workout', e);
+          }
         },
       },
     ]);
@@ -471,11 +506,14 @@ export default function HealthScreen() {
     }
 
     try {
-      const [routine] = await insertRows('workout_routines', [{ name: parsed.data }]);
-      await insertRows(
+      // Routine and exercises are saved in one write, so a failure can't
+      // leave an empty routine behind.
+      await insertWithChildren(
+        'workout_routines',
+        { name: parsed.data },
         'workout_routine_exercises',
+        'routine_id',
         exercises.map((e, idx) => ({
-          routine_id: routine.id,
           name: e.name,
           sets: e.sets || null,
           reps: e.reps || null,
@@ -485,8 +523,7 @@ export default function HealthScreen() {
         }))
       );
     } catch (e) {
-      console.error('Failed to save routine:', e);
-      Alert.alert('Error', 'Could not save routine. Your device storage may be full.');
+      storageFailed('save this routine', e);
       return;
     }
 
@@ -505,13 +542,12 @@ export default function HealthScreen() {
     const name = sessionName.trim() || null;
 
     try {
-      const [session] = await insertRows('workout_sessions', [
-        { name, performed_at: toYMD(sessionDate), notes: null },
-      ]);
-      await insertRows(
+      await insertWithChildren(
+        'workout_sessions',
+        { name, performed_at: toYMD(sessionDate), notes: null, exercise_count: exercises.length },
         'workout_session_exercises',
+        'session_id',
         exercises.map((e, idx) => ({
-          session_id: session.id,
           name: e.name,
           sets: e.sets || null,
           reps: e.reps || null,
@@ -521,8 +557,7 @@ export default function HealthScreen() {
         }))
       );
     } catch (e) {
-      console.error('Failed to save workout:', e);
-      Alert.alert('Error', 'Could not save workout. Your device storage may be full.');
+      storageFailed('save this workout', e);
       return;
     }
 
@@ -552,7 +587,12 @@ export default function HealthScreen() {
       Alert.alert('Invalid name', parsed.error.issues[0]?.message ?? 'Please check the name.');
       return;
     }
-    await upsertByName('exercise_catalog', parsed.data);
+    try {
+      await upsertByName('exercise_catalog', parsed.data);
+    } catch (e) {
+      storageFailed('add this exercise', e);
+      return;
+    }
     setNewCatalogName('');
     fetchExerciseCatalog();
   }
@@ -564,7 +604,11 @@ export default function HealthScreen() {
         text: 'Remove',
         style: 'destructive',
         onPress: async () => {
-          await deleteRows('exercise_catalog', (r) => r.id === item.id);
+          try {
+            await deleteRows('exercise_catalog', (r) => r.id === item.id);
+          } catch (e) {
+            storageFailed('remove this exercise', e);
+          }
           fetchExerciseCatalog();
         },
       },
@@ -579,8 +623,12 @@ export default function HealthScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          await deleteRows('workout_routines', (r) => r.id === id);
-          setSavedRoutines((prev) => prev.filter((r) => r.id !== id));
+          try {
+            await deleteRows('workout_routines', (r) => r.id === id);
+            setSavedRoutines((prev) => prev.filter((r) => r.id !== id));
+          } catch (e) {
+            storageFailed('delete this routine', e);
+          }
         },
       },
     ]);

@@ -53,9 +53,9 @@ export default function TasksScreen() {
   }
 
   async function handleSubmit(input: TaskInput) {
-    if (editing) await updateTask(editing.id, input);
-    else await addTask(input);
-    setFormOpen(false);
+    // Keep the form open if the save failed (the hook has already alerted).
+    const ok = editing ? await updateTask(editing.id, input) : await addTask(input);
+    if (ok) setFormOpen(false);
   }
 
   function confirmDelete(task: Task) {

@@ -23,7 +23,8 @@ import {
   saveHistory,
 } from '../utils/shoppingHistory';
 import { loadData, saveData } from '../utils/storage';
-import { deleteRows, insertRows, selectRows, upsertByName } from '../utils/localDb';
+import { toYMD } from '../utils/dates';
+import { deleteRows, insertWithChildren, selectRows, upsertByName } from '../utils/localDb';
 import { useTheme } from '../utils/theme';
 
 const STORAGE_KEY = 'shopping';
@@ -96,10 +97,6 @@ type SavedListItem = {
 
 type CatalogItem = { id: string; name: string };
 type FavoriteItem = { id: string; name: string };
-
-function toLocalYMD(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 function formatShortDate(iso: string) {
   return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, {
@@ -191,7 +188,7 @@ export default function ShoppingScreen() {
       });
     }
     try {
-      const rows = await selectRows('shopping_list_items');
+      const rows = await selectRows<SavedListItem & { created_at: string }>('shopping_list_items');
       setRemoteHistory(rows.map((r) => ({ name: String(r.name), category: r.category ?? null })));
     } catch (e) {
       console.error('Failed to load past list items:', e);
@@ -200,7 +197,8 @@ export default function ShoppingScreen() {
 
   function remember(added: { name: string; category?: string }[]) {
     if (added.length === 0) return;
-    const base = historyChain.current ?? loadHistory();
+    // If an earlier update failed, start again from what's stored.
+    const base = (historyChain.current ?? loadHistory()).catch(() => loadHistory());
     historyChain.current = base.then(async (current) => {
       const next = applyRecords(current, added);
       setLocalHistory(next);
@@ -366,6 +364,8 @@ export default function ShoppingScreen() {
       }
     } catch (e) {
       console.error('Failed to update favourites:', e);
+      persist(items.map((i) => (i.id === item.id ? { ...i, favorited: !nowFavorited } : i)));
+      Alert.alert('Could not update favourites', 'Saving to this device failed. Please try again.');
     }
     fetchFavorites();
   }
@@ -431,13 +431,14 @@ export default function ShoppingScreen() {
       year: 'numeric',
     });
     try {
-      const [list] = await insertRows('shopping_lists', [
-        { name, delivery_date: deliveryDate ? toLocalYMD(deliveryDate) : null },
-      ]);
-      await insertRows(
+      // The list and its items are saved in one write, so a failure can't
+      // leave an empty list behind.
+      await insertWithChildren(
+        'shopping_lists',
+        { name, delivery_date: deliveryDate ? toYMD(deliveryDate) : null },
         'shopping_list_items',
+        'list_id',
         items.map((i) => ({
-          list_id: list.id,
           name: i.name,
           quantity: i.quantity || null,
           checked: i.checked,
@@ -479,7 +480,12 @@ export default function ShoppingScreen() {
         text: 'Remove',
         style: 'destructive',
         onPress: async () => {
-          await deleteRows('catalog_items', (r) => r.id === item.id);
+          try {
+            await deleteRows('catalog_items', (r) => r.id === item.id);
+          } catch (e) {
+            console.error('Failed to remove catalog item:', e);
+            Alert.alert('Could not remove item', 'Saving to this device failed. Please try again.');
+          }
           fetchCatalog();
         },
       },
@@ -494,8 +500,13 @@ export default function ShoppingScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          await deleteRows('shopping_lists', (r) => r.id === id);
-          setSavedLists((prev) => prev.filter((l) => l.id !== id));
+          try {
+            await deleteRows('shopping_lists', (r) => r.id === id);
+            setSavedLists((prev) => prev.filter((l) => l.id !== id));
+          } catch (e) {
+            console.error('Failed to delete saved list:', e);
+            Alert.alert('Could not delete list', 'Saving to this device failed. Please try again.');
+          }
         },
       },
     ]);
@@ -578,7 +589,7 @@ export default function ShoppingScreen() {
                   >
                     <View className="flex-1">
                       <Text className="text-[15px] font-semibold text-stone-800 dark:text-stone-100">
-                        {formatShortDate(toLocalYMD(new Date(list.created_at)))}
+                        {formatShortDate(toYMD(new Date(list.created_at)))}
                       </Text>
                       {list.delivery_date && (
                         <Text className="text-xs text-teal-700 mt-0.5">

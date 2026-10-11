@@ -4,7 +4,7 @@ import { Alert, ScrollView, Text, TouchableOpacity, View, useColorScheme } from 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import TaskForm from '../components/TaskForm';
 import { loadData, saveData } from '../utils/storage';
-import { selectRows } from '../utils/localDb';
+import { Row, selectRows } from '../utils/localDb';
 import {
   DatedTask,
   formatTimeRange,
@@ -152,18 +152,20 @@ export default function PlannerScreen() {
 
   async function fetchSessions() {
     try {
-      const [rows, exercises] = await Promise.all([
-        selectRows('workout_sessions', { orderBy: 'performed_at', ascending: false }),
-        selectRows('workout_session_exercises'),
-      ]);
+      type SessionRow = Row & { name: string | null; performed_at: string; exercise_count?: number };
+      const rows = await selectRows<SessionRow>('workout_sessions', { orderBy: 'performed_at', ascending: false });
+      // New sessions store their count. Only older ones need the exercise table read.
       const counts = new Map<string, number>();
-      for (const e of exercises) counts.set(e.session_id, (counts.get(e.session_id) ?? 0) + 1);
+      if (rows.some((s) => typeof s.exercise_count !== 'number')) {
+        const exercises = await selectRows<Row & { session_id: string }>('workout_session_exercises');
+        for (const e of exercises) counts.set(e.session_id, (counts.get(e.session_id) ?? 0) + 1);
+      }
       setSessions(
         rows.map((s) => ({
           id: s.id,
           name: s.name ?? null,
           performed_at: s.performed_at,
-          exercise_count: counts.get(s.id) ?? 0,
+          exercise_count: s.exercise_count ?? counts.get(s.id) ?? 0,
         }))
       );
     } catch (e) {
@@ -174,7 +176,7 @@ export default function PlannerScreen() {
   async function fetchHealthStats() {
     try {
       setHealthStats(
-        (await selectRows('health_stats', { orderBy: 'recorded_at', ascending: false })) as unknown as HealthStatRow[]
+        await selectRows<HealthStatRow & Row>('health_stats', { orderBy: 'recorded_at', ascending: false })
       );
     } catch (e) {
       console.error('Failed to load health stats:', e);
@@ -241,9 +243,9 @@ export default function PlannerScreen() {
   }
 
   async function handleSubmit(input: TaskInput) {
-    if (editing) await updateTask(editing.id, input);
-    else await addTask(input);
-    setFormOpen(false);
+    // On failure the hook has already shown an alert; keep the form open.
+    const ok = editing ? await updateTask(editing.id, input) : await addTask(input);
+    if (ok) setFormOpen(false);
   }
 
   // ── Derived ─────────────────────────────────────────────────────────────────

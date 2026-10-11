@@ -1,7 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
+import { Alert } from 'react-native';
 import { cancelEventNotification, scheduleEventNotification } from './notifications';
+import { fromYMD, toYMD, todayYMD } from './dates';
+import { newId } from './localDb';
 import { loadData, saveData } from './storage';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -90,22 +93,7 @@ export function isMustDo(task: Pick<Task, 'tags'>) {
 
 // ─── Date helpers ────────────────────────────────────────────────────────────
 
-export function toYMD(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
-/** Parse YYYY-MM-DD as a local date (not UTC). */
-export function fromYMD(ymd: string): Date {
-  const [y, m, d] = ymd.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
-export function todayYMD() {
-  return toYMD(new Date());
-}
+export { fromYMD, toYMD, todayYMD };
 
 export function formatTime(hhmm: string | undefined, is24Hour = false): string {
   if (!hhmm) return '';
@@ -203,10 +191,6 @@ export function dailyProgress(tasks: Task[], ymd = todayYMD()) {
 
 // ─── Migration ───────────────────────────────────────────────────────────────
 
-function newId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 /** Converts a v1 task (ISO dueDate / dueTime) into the current shape. */
 function normalizeLegacyTask(raw: any): Task {
   const date =
@@ -251,24 +235,47 @@ function eventToTask(ev: any): Task {
   };
 }
 
+// ─── Strict storage ──────────────────────────────────────────────────────────
+// The shared storage helpers swallow errors. Tasks use AsyncStorage directly so
+// a failed read is never mistaken for "no tasks" and a failed write is reported.
+
+async function readJson(key: string): Promise<any> {
+  const raw = await AsyncStorage.getItem(key);
+  return raw == null ? null : JSON.parse(raw);
+}
+
+async function writeTasks(tasks: Task[]) {
+  await AsyncStorage.setItem(TASKS_KEY, JSON.stringify(tasks));
+}
+
+// ─── Migration ───────────────────────────────────────────────────────────────
+
 let migrationPromise: Promise<void> | null = null;
 
 /** One-time merge of v1 tasks + Planner events into the unified store. */
 function migrateIfNeeded(): Promise<void> {
   if (!migrationPromise) {
     migrationPromise = (async () => {
-      const version = await loadData(SCHEMA_VERSION_KEY);
+      const version = await readJson(SCHEMA_VERSION_KEY);
       if (typeof version === 'number' && version >= SCHEMA_VERSION) return;
 
-      const rawTasks: any[] = (await loadData(TASKS_KEY)) ?? [];
-      const rawEvents: any[] = (await loadData(LEGACY_EVENTS_KEY)) ?? [];
-      const merged = [...rawTasks.map(normalizeLegacyTask), ...rawEvents.map(eventToTask)];
+      // Strict reads: if either read fails, the migration throws and retries
+      // next time instead of overwriting tasks with a partial list.
+      const rawTasks = (await readJson(TASKS_KEY)) ?? [];
+      const rawEvents = (await readJson(LEGACY_EVENTS_KEY)) ?? [];
+      if (!Array.isArray(rawTasks) || !Array.isArray(rawEvents)) {
+        throw new Error('Stored tasks or events are not a list');
+      }
 
-      // Use AsyncStorage directly: the shared storage helpers swallow errors,
-      // and old events must only be deleted once the merged list is safely saved.
-      await AsyncStorage.setItem(TASKS_KEY, JSON.stringify(merged));
-      const check = await AsyncStorage.getItem(TASKS_KEY);
-      const saved = check ? JSON.parse(check) : null;
+      // Idempotent: if a previous run saved the merge but died before marking
+      // it done, events already present (same id) aren't added twice.
+      const tasks = rawTasks.map(normalizeLegacyTask);
+      const ids = new Set(tasks.map((t) => t.id));
+      const merged = [...tasks, ...rawEvents.map(eventToTask).filter((t) => !ids.has(t.id))];
+
+      // Old events are only deleted once the merged list is saved and verified.
+      await writeTasks(merged);
+      const saved = await readJson(TASKS_KEY);
       if (!Array.isArray(saved) || saved.length !== merged.length) {
         throw new Error('Merged tasks did not save correctly');
       }
@@ -277,15 +284,17 @@ function migrateIfNeeded(): Promise<void> {
     })().catch((e) => {
       // Leave planner_events and the schema version untouched so the next load retries.
       migrationPromise = null;
-      console.error('Task migration failed:', e);
+      throw e;
     });
   }
   return migrationPromise;
 }
 
+/** Loads all tasks. Throws if storage can't be read. */
 export async function loadTasks(): Promise<Task[]> {
   await migrateIfNeeded();
-  const stored: any[] = (await loadData(TASKS_KEY)) ?? [];
+  const stored = (await readJson(TASKS_KEY)) ?? [];
+  if (!Array.isArray(stored)) throw new Error('Stored tasks are not a list');
   return stored.map(normalizeLegacyTask);
 }
 
@@ -310,48 +319,99 @@ async function cancelFor(task: Task) {
   }
 }
 
+// ─── Operation queue ─────────────────────────────────────────────────────────
+// Every task operation, from any screen, runs one at a time and starts from
+// what's in storage. A double-tap or a tick during a reload therefore can't
+// act on stale data or overwrite another change.
+
+let queue: Promise<unknown> = Promise.resolve();
+
+function enqueue<T>(op: () => Promise<T>): Promise<T> {
+  const run = queue.catch(() => {}).then(op);
+  queue = run;
+  return run;
+}
+
+/** Undone daily repeats from earlier days, moved to today. */
+async function rollDailyForward(tasks: Task[]): Promise<Task[] | null> {
+  const today = todayYMD();
+  const stale = tasks.filter((t) => t.recurrence === 'daily' && !t.done && t.date < today);
+  if (stale.length === 0) return null;
+  const moved = new Map<string, Task>();
+  for (const t of stale) {
+    const m: Task = { ...t, date: today, notificationId: null };
+    m.notificationId = await scheduleFor(m);
+    moved.set(t.id, m);
+  }
+  return tasks.map((t) => moved.get(t.id) ?? t);
+}
+
+/**
+ * The upcoming instances a repeating task created (following `nextId`), that
+ * aren't done yet. Used to delete a whole series.
+ */
+function undoneSuccessors(tasks: Task[], task: Task): Task[] {
+  const out: Task[] = [];
+  const seen = new Set<string>([task.id]);
+  let nextId = task.nextId;
+  while (nextId && !seen.has(nextId)) {
+    seen.add(nextId);
+    const next = tasks.find((t) => t.id === nextId);
+    if (!next) break;
+    if (!next.done) out.push(next);
+    nextId = next.nextId;
+  }
+  return out;
+}
+
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 /**
  * Shared task store for the Tasks and Planner tabs. Reloads whenever the
  * screen gains focus so edits made in one tab show up in the other.
+ *
+ * Mutations resolve to `true` when saved. On failure they show an alert,
+ * restore the on-screen list from storage, and resolve to `false`.
  */
 export function useTasks() {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const tasksRef = useRef<Task[]>([]);
 
-  const commit = useCallback(async (next: Task[]) => {
-    tasksRef.current = next;
-    setTasks(next);
-    await saveData(TASKS_KEY, next);
-  }, []);
+  /** Runs a queued read-modify-write. `fn` returns the new list, or null for no change. */
+  const mutate = useCallback(
+    (fn: (current: Task[]) => Promise<Task[] | null>): Promise<boolean> =>
+      enqueue(async () => {
+        try {
+          const current = await loadTasks();
+          const next = await fn(current);
+          if (next) await writeTasks(next);
+          setTasks(next ?? current);
+          return true;
+        } catch (e) {
+          console.error('Task save failed:', e);
+          Alert.alert('Could not save', 'Your change was not saved. Your device storage may be full.');
+          try {
+            setTasks(await loadTasks());
+          } catch {
+            // Keep what's on screen if storage can't be read either.
+          }
+          return false;
+        }
+      }),
+    []
+  );
 
   const reload = useCallback(async () => {
-    const loaded = await loadTasks();
-    tasksRef.current = loaded;
-    setTasks(loaded);
-
-    // Undone daily repeats from previous days roll forward to today, so a
-    // missed day doesn't leave the routine stuck in the past.
-    const today = todayYMD();
-    const stale = (t: Task) => t.recurrence === 'daily' && !t.done && t.date < today;
-    const toRoll = loaded.filter(stale);
-    if (toRoll.length === 0) return;
-
-    const notificationIds = new Map<string, string | null>();
-    for (const t of toRoll) {
-      notificationIds.set(t.id, await scheduleFor({ ...t, date: today }));
-    }
-    // Apply to the *current* list, not the snapshot, so edits made while
-    // notifications were being scheduled aren't overwritten.
-    await commit(
-      tasksRef.current.map((t) =>
-        notificationIds.has(t.id) && stale(t)
-          ? { ...t, date: today, notificationId: notificationIds.get(t.id) ?? null }
-          : t
-      )
-    );
-  }, [commit]);
+    await enqueue(async () => {
+      try {
+        const loaded = await loadTasks();
+        const rolled = await rollDailyForward(loaded);
+        if (rolled) await writeTasks(rolled);
+        setTasks(rolled ?? loaded);
+      } catch (e) {
+        console.error('Failed to load tasks:', e);
+      }
+    });
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -360,106 +420,113 @@ export function useTasks() {
   );
 
   const addTask = useCallback(
-    async (input: TaskInput) => {
-      const task: Task = {
-        ...input,
-        id: newId(),
-        done: false,
-        notificationId: null,
-        createdAt: new Date().toISOString(),
-      };
-      task.notificationId = await scheduleFor(task);
-      await commit([task, ...tasksRef.current]);
-    },
-    [commit]
+    (input: TaskInput) =>
+      mutate(async (current) => {
+        const task: Task = {
+          ...input,
+          id: newId(),
+          done: false,
+          notificationId: null,
+          createdAt: new Date().toISOString(),
+        };
+        task.notificationId = await scheduleFor(task);
+        return [task, ...current];
+      }),
+    [mutate]
   );
 
   const updateTask = useCallback(
-    async (id: string, input: TaskInput) => {
-      const existing = tasksRef.current.find((t) => t.id === id);
-      if (!existing) return;
-      await cancelFor(existing);
-      const updated: Task = {
-        ...existing,
-        ...input,
-        notificationId: null,
-        // A new date starts a new monthly anchor.
-        anchorDay: input.date !== existing.date ? undefined : existing.anchorDay,
-      };
-      updated.notificationId = await scheduleFor(updated);
-      await commit(tasksRef.current.map((t) => (t.id === id ? updated : t)));
-    },
-    [commit]
+    (id: string, input: TaskInput) =>
+      mutate(async (current) => {
+        const existing = current.find((t) => t.id === id);
+        if (!existing) return null;
+        await cancelFor(existing);
+        const updated: Task = {
+          ...existing,
+          ...input,
+          notificationId: null,
+          // A new date starts a new monthly anchor.
+          anchorDay: input.date !== existing.date ? undefined : existing.anchorDay,
+        };
+        updated.notificationId = await scheduleFor(updated);
+        return current.map((t) => (t.id === id ? updated : t));
+      }),
+    [mutate]
   );
 
+  /**
+   * Deletes a task. For a repeating task this also deletes the upcoming
+   * instances it created, so the series stops. Completed instances are kept.
+   */
   const deleteTask = useCallback(
-    async (id: string) => {
-      const existing = tasksRef.current.find((t) => t.id === id);
-      if (existing) await cancelFor(existing);
-      await commit(tasksRef.current.filter((t) => t.id !== id));
-    },
-    [commit]
+    (id: string) =>
+      mutate(async (current) => {
+        const existing = current.find((t) => t.id === id);
+        if (!existing) return null;
+        const doomed = [existing, ...(existing.recurrence !== 'none' ? undoneSuccessors(current, existing) : [])];
+        for (const t of doomed) await cancelFor(t);
+        const ids = new Set(doomed.map((t) => t.id));
+        return current.filter((t) => !ids.has(t.id));
+      }),
+    [mutate]
   );
 
   /**
    * Toggles done. Completing a recurring task spawns its next instance;
    * un-completing it removes that instance again (unless it's already done).
+   * Only an instance this tick created is ever removed.
    */
   const toggleDone = useCallback(
-    async (id: string) => {
-      const task = tasksRef.current.find((t) => t.id === id);
-      if (!task) return;
-      const nowDone = !task.done;
+    (id: string) =>
+      mutate(async (current) => {
+        const task = current.find((t) => t.id === id);
+        if (!task) return null;
 
-      if (nowDone) {
-        await cancelFor(task);
-        const updated: Task = { ...task, done: true, notificationId: null };
-        let spawned: Task | null = null;
+        if (!task.done) {
+          await cancelFor(task);
+          const updated: Task = { ...task, done: true, notificationId: null, nextId: undefined };
+          let spawned: Task | null = null;
 
-        if (task.recurrence !== 'none') {
-          const anchorDay = task.anchorDay ?? fromYMD(task.date).getDate();
-          // If completed late, skip ahead so the next instance isn't already overdue.
-          const today = todayYMD();
-          let nextDate = nextOccurrence(task.date, task.recurrence, anchorDay);
-          while (nextDate < today) nextDate = nextOccurrence(nextDate, task.recurrence, anchorDay);
+          if (task.recurrence !== 'none') {
+            const anchorDay = task.anchorDay ?? fromYMD(task.date).getDate();
+            // If completed late, skip ahead so the next instance isn't already overdue.
+            const today = todayYMD();
+            let nextDate = nextOccurrence(task.date, task.recurrence, anchorDay);
+            while (nextDate < today) nextDate = nextOccurrence(nextDate, task.recurrence, anchorDay);
 
-          const existing = tasksRef.current.find(
-            (t) => t.id !== id && t.title === task.title && t.date === nextDate && t.recurrence === task.recurrence
-          );
-          if (existing) {
-            updated.nextId = existing.id;
-          } else {
-            spawned = {
-              ...task,
-              id: newId(),
-              date: nextDate,
-              done: false,
-              notificationId: null,
-              nextId: undefined,
-              anchorDay,
-              createdAt: new Date().toISOString(),
-            };
-            spawned.notificationId = await scheduleFor(spawned);
-            updated.nextId = spawned.id;
+            // An identical upcoming instance already exists: don't spawn a
+            // duplicate, and don't link to it (it isn't ours to remove later).
+            const alreadyThere = current.some(
+              (t) => t.id !== id && t.title === task.title && t.date === nextDate && t.recurrence === task.recurrence
+            );
+            if (!alreadyThere) {
+              spawned = {
+                ...task,
+                id: newId(),
+                date: nextDate,
+                done: false,
+                notificationId: null,
+                nextId: undefined,
+                anchorDay,
+                createdAt: new Date().toISOString(),
+              };
+              spawned.notificationId = await scheduleFor(spawned);
+              updated.nextId = spawned.id;
+            }
           }
+          const next = current.map((t) => (t.id === id ? updated : t));
+          return spawned ? [spawned, ...next] : next;
         }
-        const next = tasksRef.current.map((t) => (t.id === id ? updated : t));
-        await commit(spawned ? [spawned, ...next] : next);
-      } else {
+
         const updated: Task = { ...task, done: false, nextId: undefined, notificationId: null };
         updated.notificationId = await scheduleFor(updated);
         // Remove the instance this tick created, so the task isn't duplicated.
-        const spawned = task.nextId ? tasksRef.current.find((t) => t.id === task.nextId) : undefined;
-        const removeSpawned = spawned && !spawned.done;
-        if (removeSpawned) await cancelFor(spawned);
-        await commit(
-          tasksRef.current
-            .filter((t) => !(removeSpawned && t.id === spawned!.id))
-            .map((t) => (t.id === id ? updated : t))
-        );
-      }
-    },
-    [commit]
+        const spawned = task.nextId ? current.find((t) => t.id === task.nextId) : undefined;
+        const removeId = spawned && !spawned.done ? spawned.id : null;
+        if (spawned && removeId) await cancelFor(spawned);
+        return current.filter((t) => t.id !== removeId).map((t) => (t.id === id ? updated : t));
+      }),
+    [mutate]
   );
 
   return { tasks, reload, addTask, updateTask, deleteTask, toggleDone };

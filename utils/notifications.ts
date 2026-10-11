@@ -1,5 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import { fromYMD } from './dates';
 
 // How notifications behave when the app is in the foreground
 Notifications.setNotificationHandler({
@@ -37,10 +38,9 @@ export async function scheduleEventNotification(
   date: string,  // YYYY-MM-DD
   time: string   // HH:MM
 ): Promise<string | null> {
-  const [year, month, day] = date.split('-').map(Number);
   const [hour, minute] = time.split(':').map(Number);
-
-  const trigger = new Date(year, month - 1, day, hour, minute, 0);
+  const trigger = fromYMD(date);
+  trigger.setHours(hour, minute, 0, 0);
 
   // Don't schedule notifications in the past
   if (trigger <= new Date()) return null;

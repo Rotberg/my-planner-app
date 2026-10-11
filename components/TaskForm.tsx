@@ -230,9 +230,11 @@ export default function TaskForm({
                   value={fromYMD(date)}
                   mode="date"
                   display={Platform.OS === 'ios' ? 'inline' : 'default'}
-                  onChange={(_, selected) => {
+                  onChange={(event, selected) => {
                     if (Platform.OS !== 'ios') setPicker(null);
-                    if (selected) setDate(toYMD(selected));
+                    // Android reports the original value on Cancel; only accept a real pick.
+                    if (event.type !== 'set' || !selected) return;
+                    setDate(toYMD(selected));
                   }}
                 />
               )}
@@ -303,10 +305,11 @@ export default function TaskForm({
                   mode="time"
                   is24Hour={is24Hour}
                   display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(_, selected) => {
+                  onChange={(event, selected) => {
                     const which = picker;
                     if (Platform.OS !== 'ios') setPicker(null);
-                    if (!selected) return;
+                    // Android reports the original value on Cancel; only accept a real pick.
+                    if (event.type !== 'set' || !selected) return;
                     if (which === 'start') setStartTime(hhmmFromDate(selected));
                     else setEndTime(hhmmFromDate(selected));
                   }}
