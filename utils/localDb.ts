@@ -58,10 +58,14 @@ export function newId() {
 /** `backupKey` is null when the backup couldn't be saved (e.g. storage full). */
 type CorruptionListener = (label: string, backupKey: string | null) => void;
 const corruptionListeners = new Set<CorruptionListener>();
+// Resets that happen before anyone listens (e.g. during the first screen
+// load, before the root layout's effect runs) are delivered on subscribe.
+const pendingRecoveries: [string, string | null][] = [];
 
 /** Called when a table had to be reset because its stored value was unreadable. */
 export function onTableRecovered(listener: CorruptionListener) {
   corruptionListeners.add(listener);
+  pendingRecoveries.splice(0).forEach(([label, key]) => listener(label, key));
   return () => {
     corruptionListeners.delete(listener);
   };
@@ -92,7 +96,8 @@ export async function quarantineKey(key: string, label: string, raw: string) {
   }
   await AsyncStorage.removeItem(key);
   console.warn(`[localDb] ${label} was unreadable and was reset. Backup: ${backupKey ?? 'could not be saved'}`);
-  corruptionListeners.forEach((l) => l(label, backupKey));
+  if (corruptionListeners.size === 0) pendingRecoveries.push([label, backupKey]);
+  else corruptionListeners.forEach((l) => l(label, backupKey));
 }
 
 // ─── Reading ─────────────────────────────────────────────────────────────────
@@ -181,8 +186,10 @@ function mutateMany<T>(tables: TableName[], fn: (current: Tables) => { changed: 
 
 function mutate<T>(table: TableName, fn: (rows: Row[]) => { rows: Row[]; result: T }): Promise<T> {
   return mutateMany([table], (current) => {
-    const { rows, result } = fn(current[table]!);
-    return { changed: { [table]: rows }, result };
+    const before = current[table]!;
+    const { rows, result } = fn(before);
+    // Unchanged (same array returned): skip the write entirely.
+    return { changed: rows === before ? {} : { [table]: rows }, result };
   });
 }
 
@@ -288,7 +295,10 @@ export function updateRows(table: TableName, where: (row: Row) => boolean, patch
 export function deleteRows(table: TableName, where: (row: Row) => boolean): Promise<void> {
   const cascade = CASCADES[table];
   if (!cascade) {
-    return mutate(table, (current) => ({ rows: current.filter((r) => !where(r)), result: undefined }));
+    return mutate(table, (current) => {
+      const kept = current.filter((r) => !where(r));
+      return { rows: kept.length === current.length ? current : kept, result: undefined };
+    });
   }
   return mutateMany([table, cascade.table], (current) => {
     const parents = current[table]!;

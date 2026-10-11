@@ -423,9 +423,10 @@ export function useTasks() {
   const mutate = useCallback(
     (fn: (current: Task[]) => Change | null): Promise<boolean> =>
       enqueue(async () => {
-        let stage: 'read' | 'write' = 'read';
+        let stage: 'read' | 'apply' | 'write' = 'read';
         try {
           const current = await loadTasks();
+          stage = 'apply';
           const change = fn(current);
           stage = 'write';
           setTasks(change ? await commitChange(change) : current);
@@ -436,6 +437,8 @@ export function useTasks() {
             'Could not save',
             stage === 'write'
               ? 'Your change was not saved. Your device storage may be full.'
+              : stage === 'apply'
+              ? 'This change could not be made to the task. Try editing the task instead.'
               : 'Your change was not saved because your tasks could not be read. Please try again.'
           );
           try {
@@ -453,8 +456,16 @@ export function useTasks() {
     await enqueue(async () => {
       try {
         const loaded = await loadTasks();
+        // Show what loaded straight away, even if moving daily repeats fails to save.
+        setTasks(loaded);
         const rolled = rollDailyForward(loaded);
-        setTasks(rolled ? await commitChange(rolled) : loaded);
+        if (rolled) {
+          try {
+            setTasks(await commitChange(rolled));
+          } catch (e) {
+            console.warn('Could not move missed daily tasks to today:', e);
+          }
+        }
       } catch (e) {
         console.error('Failed to load tasks:', e);
       }

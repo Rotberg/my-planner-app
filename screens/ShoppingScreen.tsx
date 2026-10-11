@@ -360,7 +360,8 @@ export default function ShoppingScreen() {
 
   async function toggleFavorite(item: ShoppingItem) {
     const nowFavorited = !item.favorited;
-    persist(items.map((i) => (i.id === item.id ? { ...i, favorited: nowFavorited } : i)));
+    // Build from the latest list, so two quick taps can't undo each other.
+    persist(itemsRef.current.map((i) => (i.id === item.id ? { ...i, favorited: nowFavorited } : i)));
     try {
       if (nowFavorited) {
         await upsertByName('favorite_items', item.name);
