@@ -1,5 +1,5 @@
 import { useFocusEffect } from '@react-navigation/native';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import {
   DaySteps,
@@ -12,6 +12,7 @@ import {
   saveStepGoal,
   StepsStatus,
 } from '../utils/steps';
+import { fromYMD } from '../utils/dates';
 import { useTheme } from '../utils/theme';
 
 // Validated against both light and dark surfaces (dataviz palette check).
@@ -19,13 +20,11 @@ const BAR_COLOR = '#0d9488';
 const CHART_HEIGHT = 84;
 
 function dayLabel(ymd: string) {
-  const [y, m, d] = ymd.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'narrow' });
+  return fromYMD(ymd).toLocaleDateString(undefined, { weekday: 'narrow' });
 }
 
 function longDate(ymd: string) {
-  const [y, m, d] = ymd.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  return fromYMD(ymd).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 /** Android step tracking card backed by Health Connect. Hidden on iOS/web. */
@@ -39,40 +38,57 @@ export default function StepsCard() {
   const [selected, setSelected] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    const s = await getStepsStatus();
-    setStatus(s);
-    if (s !== 'ready') return;
-    try {
-      setDays(await readDailySteps(7));
-      setError(null);
-    } catch (e) {
-      console.error('Failed to read steps:', e);
-      setError('Could not read steps from Health Connect.');
+  // Overlapping refreshes (focus + app resume + after granting permission)
+  // share one in-flight run instead of reading Health Connect several times.
+  const inFlight = useRef<Promise<void> | null>(null);
+  /** `fresh` waits for any refresh already running, then always starts a new one. */
+  const refresh = useCallback((fresh = false): Promise<void> => {
+    if (fresh && inFlight.current) {
+      // A failed earlier run must not stop the fresh check.
+      return inFlight.current.catch(() => {}).then(() => refresh(true));
     }
+    if (!inFlight.current) {
+      inFlight.current = (async () => {
+        const s = await getStepsStatus();
+        setStatus(s);
+        if (s !== 'ready') return;
+        try {
+          setDays(await readDailySteps(7));
+          setError(null);
+        } catch (e) {
+          console.warn('Failed to read steps:', e);
+          setError('Could not read steps from Health Connect.');
+        }
+      })()
+        .catch((e) => console.warn('Steps refresh failed:', e))
+        .finally(() => {
+          inFlight.current = null;
+        });
+    }
+    return inFlight.current;
   }, []);
 
   useEffect(() => {
     loadStepGoal().then(setGoal);
   }, []);
 
+  // Refresh on focus, and on app resume only while this tab is focused
+  // (e.g. returning from Health Connect settings).
   useFocusEffect(
     useCallback(() => {
       refresh();
+      const sub = AppState.addEventListener('change', (state) => {
+        if (state === 'active') refresh();
+      });
+      return () => sub.remove();
     }, [refresh])
   );
 
-  // Re-check after returning from the Health Connect app / settings.
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') refresh();
-    });
-    return () => sub.remove();
-  }, [refresh]);
-
   async function connect() {
     await requestStepsPermission();
-    refresh();
+    // A refresh may already be running from the app resuming, started before
+    // the grant was visible. Always check again afterwards.
+    await refresh(true);
   }
 
   function submitGoal() {
@@ -87,6 +103,32 @@ export default function StepsCard() {
   if (status === 'unsupported') return null;
 
   const card = 'mx-4 mb-3 p-4 bg-white dark:bg-stone-800 rounded-xl shadow';
+
+  if (status === 'needs-build') {
+    return (
+      <View className={card}>
+        <Text className="text-sm font-bold text-stone-700 dark:text-stone-200 mb-1">Steps</Text>
+        <Text className="text-xs text-stone-500 dark:text-stone-400">
+          Step tracking needs the installed app build, because it uses Health Connect. It isn&apos;t
+          available when running in Expo Go.
+        </Text>
+      </View>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <View className={card}>
+        <Text className="text-sm font-bold text-stone-700 dark:text-stone-200 mb-1">Steps</Text>
+        <Text className="text-xs text-stone-500 dark:text-stone-400 mb-3">
+          Couldn&apos;t reach Health Connect just now.
+        </Text>
+        <TouchableOpacity className="bg-teal-600 rounded-lg py-2.5 items-center" onPress={() => refresh(true)}>
+          <Text className="text-white text-sm font-bold">Try again</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   if (status === 'loading') {
     return (

@@ -53,9 +53,9 @@ export default function TasksScreen() {
   }
 
   async function handleSubmit(input: TaskInput) {
-    if (editing) await updateTask(editing.id, input);
-    else await addTask(input);
-    setFormOpen(false);
+    // Keep the form open if the save failed (the hook has already alerted).
+    const ok = editing ? await updateTask(editing.id, input) : await addTask(input);
+    if (ok) setFormOpen(false);
   }
 
   function confirmDelete(task: Task) {
@@ -213,7 +213,14 @@ export default function TasksScreen() {
         is24Hour={is24Hour}
         onToggle24Hour={toggle24Hour}
         onSubmit={handleSubmit}
-        onDelete={editing ? () => { deleteTask(editing.id); setFormOpen(false); } : undefined}
+        onDelete={
+          editing
+            ? async () => {
+                // On failure the hook has shown an alert; keep the form open to retry.
+                if (await deleteTask(editing.id)) setFormOpen(false);
+              }
+            : undefined
+        }
         onClose={() => setFormOpen(false)}
       />
     </SafeAreaView>

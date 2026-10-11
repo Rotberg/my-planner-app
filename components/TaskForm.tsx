@@ -132,14 +132,16 @@ export default function TaskForm({
   }
 
   function confirmDelete() {
-    const isSeries = task && task.recurrence !== 'none';
+    // Deleting the live instance of a repeating task ends the series; deleting
+    // a completed one only removes that entry.
+    const isSeries = task && task.recurrence !== 'none' && !task.done;
     Alert.alert(
       isSeries ? 'Delete repeating task' : 'Delete task',
       isSeries
         ? 'This deletes the task and all of its future repeats. Completed past instances are kept.'
         : 'Are you sure you want to delete this task?',
       [
-      { text: 'Cancel', style: 'cancel' },
+        { text: 'Cancel', style: 'cancel' },
         { text: 'Delete', style: 'destructive', onPress: onDelete },
       ]
     );
@@ -230,9 +232,11 @@ export default function TaskForm({
                   value={fromYMD(date)}
                   mode="date"
                   display={Platform.OS === 'ios' ? 'inline' : 'default'}
-                  onChange={(_, selected) => {
+                  onChange={(event, selected) => {
                     if (Platform.OS !== 'ios') setPicker(null);
-                    if (selected) setDate(toYMD(selected));
+                    // Android reports the original value on Cancel; only accept a real pick.
+                    if (event.type !== 'set' || !selected) return;
+                    setDate(toYMD(selected));
                   }}
                 />
               )}
@@ -303,10 +307,11 @@ export default function TaskForm({
                   mode="time"
                   is24Hour={is24Hour}
                   display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(_, selected) => {
+                  onChange={(event, selected) => {
                     const which = picker;
                     if (Platform.OS !== 'ios') setPicker(null);
-                    if (!selected) return;
+                    // Android reports the original value on Cancel; only accept a real pick.
+                    if (event.type !== 'set' || !selected) return;
                     if (which === 'start') setStartTime(hhmmFromDate(selected));
                     else setEndTime(hhmmFromDate(selected));
                   }}
