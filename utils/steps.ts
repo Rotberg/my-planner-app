@@ -18,6 +18,7 @@ export type StepsStatus =
   | 'needs-build'        // Android, but the app has no Health Connect native code (e.g. Expo Go)
   | 'not-installed'      // Health Connect app missing / needs update
   | 'needs-permission'
+  | 'error'              // Health Connect is there but a call failed (retry)
   | 'ready';
 
 export type DaySteps = { date: string; steps: number }; // date = YYYY-MM-DD
@@ -71,7 +72,7 @@ export async function getStepsStatus(): Promise<StepsStatus> {
     return hasSteps ? 'ready' : 'needs-permission';
   } catch (e) {
     console.warn('Health Connect status check failed:', e);
-    return 'not-installed';
+    return 'error';
   }
 }
 

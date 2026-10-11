@@ -4,7 +4,7 @@ import { useCallback, useState } from 'react';
 import { Alert } from 'react-native';
 import { cancelEventNotification, scheduleEventNotification } from './notifications';
 import { fromYMD, toYMD, todayYMD } from './dates';
-import { newId } from './localDb';
+import { newId, quarantineKey } from './localDb';
 import { loadData, saveData } from './storage';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -239,9 +239,32 @@ function eventToTask(ev: any): Task {
 // The shared storage helpers swallow errors. Tasks use AsyncStorage directly so
 // a failed read is never mistaken for "no tasks" and a failed write is reported.
 
+/**
+ * Reads a stored list. Read errors throw, but an unparsable or non-list value
+ * is backed up and treated as empty, so one bad value can't break the Tasks
+ * and Planner tabs for good. Only call this inside the task queue.
+ */
+async function readList(key: string, label: string): Promise<any[] | null> {
+  const raw = await AsyncStorage.getItem(key);
+  if (raw == null) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // fall through
+  }
+  await quarantineKey(key, label, raw);
+  return null;
+}
+
 async function readJson(key: string): Promise<any> {
   const raw = await AsyncStorage.getItem(key);
-  return raw == null ? null : JSON.parse(raw);
+  if (raw == null) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 async function writeTasks(tasks: Task[]) {
@@ -261,11 +284,8 @@ function migrateIfNeeded(): Promise<void> {
 
       // Strict reads: if either read fails, the migration throws and retries
       // next time instead of overwriting tasks with a partial list.
-      const rawTasks = (await readJson(TASKS_KEY)) ?? [];
-      const rawEvents = (await readJson(LEGACY_EVENTS_KEY)) ?? [];
-      if (!Array.isArray(rawTasks) || !Array.isArray(rawEvents)) {
-        throw new Error('Stored tasks or events are not a list');
-      }
+      const rawTasks = (await readList(TASKS_KEY, 'tasks')) ?? [];
+      const rawEvents = (await readList(LEGACY_EVENTS_KEY, 'planner events')) ?? [];
 
       // Idempotent: if a previous run saved the merge but died before marking
       // it done, events already present (same id) aren't added twice.
@@ -293,8 +313,7 @@ function migrateIfNeeded(): Promise<void> {
 /** Loads all tasks. Throws if storage can't be read. */
 export async function loadTasks(): Promise<Task[]> {
   await migrateIfNeeded();
-  const stored = (await readJson(TASKS_KEY)) ?? [];
-  if (!Array.isArray(stored)) throw new Error('Stored tasks are not a list');
+  const stored = (await readList(TASKS_KEY, 'tasks')) ?? [];
   return stored.map(normalizeLegacyTask);
 }
 
@@ -332,18 +351,60 @@ function enqueue<T>(op: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** Undone daily repeats from earlier days, moved to today. */
-async function rollDailyForward(tasks: Task[]): Promise<Task[] | null> {
+/** Undone daily repeats from earlier days, moved to today. Notifications are scheduled after saving. */
+function rollDailyForward(tasks: Task[]): Change | null {
   const today = todayYMD();
   const stale = tasks.filter((t) => t.recurrence === 'daily' && !t.done && t.date < today);
   if (stale.length === 0) return null;
-  const moved = new Map<string, Task>();
-  for (const t of stale) {
-    const m: Task = { ...t, date: today, notificationId: null };
-    m.notificationId = await scheduleFor(m);
-    moved.set(t.id, m);
+  const ids = new Set(stale.map((t) => t.id));
+  return {
+    next: tasks.map((t) => (ids.has(t.id) ? { ...t, date: today, notificationId: null } : t)),
+    cancel: stale,
+    schedule: [...ids],
+  };
+}
+
+/**
+ * A change to the task list. Notification side effects are applied only after
+ * `next` is saved, so a failed save can't leave reminders behind or lose them.
+ */
+type Change = {
+  next: Task[];
+  /** Tasks whose current notification should be cancelled once saved. */
+  cancel?: Task[];
+  /** Ids in `next` to schedule a notification for once saved. */
+  schedule?: string[];
+};
+
+/** Saves a change, then cancels/schedules notifications and stores the new ids. */
+async function commitChange(change: Change): Promise<Task[]> {
+  await writeTasks(change.next);
+  for (const t of change.cancel ?? []) await cancelFor(t);
+  const scheduled = new Map<string, string>();
+  for (const id of change.schedule ?? []) {
+    const t = change.next.find((x) => x.id === id);
+    if (!t) continue;
+    const nid = await scheduleFor(t);
+    if (nid) scheduled.set(id, nid);
   }
-  return tasks.map((t) => moved.get(t.id) ?? t);
+  if (scheduled.size === 0) return change.next;
+  const final = change.next.map((t) => (scheduled.has(t.id) ? { ...t, notificationId: scheduled.get(t.id)! } : t));
+  try {
+    await writeTasks(final);
+    return final;
+  } catch (e) {
+    // The task change is saved; only the reminder ids couldn't be. Cancel the
+    // new reminders rather than leave ones the app can't track.
+    for (const nid of scheduled.values()) {
+      try {
+        await cancelEventNotification(nid);
+      } catch {
+        // ignore
+      }
+    }
+    console.warn('Saved the change but not its reminders:', e);
+    return change.next;
+  }
 }
 
 /**
@@ -351,6 +412,8 @@ async function rollDailyForward(tasks: Task[]): Promise<Task[] | null> {
  * aren't done yet. Used to delete a whole series.
  */
 function undoneSuccessors(tasks: Task[], task: Task): Task[] {
+  // A completed instance is history: deleting it must not end the series.
+  if (task.done) return [];
   const out: Task[] = [];
   const seen = new Set<string>([task.id]);
   let nextId = task.nextId;
@@ -378,13 +441,12 @@ export function useTasks() {
 
   /** Runs a queued read-modify-write. `fn` returns the new list, or null for no change. */
   const mutate = useCallback(
-    (fn: (current: Task[]) => Promise<Task[] | null>): Promise<boolean> =>
+    (fn: (current: Task[]) => Change | null): Promise<boolean> =>
       enqueue(async () => {
         try {
           const current = await loadTasks();
-          const next = await fn(current);
-          if (next) await writeTasks(next);
-          setTasks(next ?? current);
+          const change = fn(current);
+          setTasks(change ? await commitChange(change) : current);
           return true;
         } catch (e) {
           console.error('Task save failed:', e);
@@ -404,9 +466,8 @@ export function useTasks() {
     await enqueue(async () => {
       try {
         const loaded = await loadTasks();
-        const rolled = await rollDailyForward(loaded);
-        if (rolled) await writeTasks(rolled);
-        setTasks(rolled ?? loaded);
+        const rolled = rollDailyForward(loaded);
+        setTasks(rolled ? await commitChange(rolled) : loaded);
       } catch (e) {
         console.error('Failed to load tasks:', e);
       }
@@ -421,7 +482,7 @@ export function useTasks() {
 
   const addTask = useCallback(
     (input: TaskInput) =>
-      mutate(async (current) => {
+      mutate((current) => {
         const task: Task = {
           ...input,
           id: newId(),
@@ -429,18 +490,16 @@ export function useTasks() {
           notificationId: null,
           createdAt: new Date().toISOString(),
         };
-        task.notificationId = await scheduleFor(task);
-        return [task, ...current];
+        return { next: [task, ...current], schedule: [task.id] };
       }),
     [mutate]
   );
 
   const updateTask = useCallback(
     (id: string, input: TaskInput) =>
-      mutate(async (current) => {
+      mutate((current) => {
         const existing = current.find((t) => t.id === id);
         if (!existing) return null;
-        await cancelFor(existing);
         const updated: Task = {
           ...existing,
           ...input,
@@ -448,8 +507,11 @@ export function useTasks() {
           // A new date starts a new monthly anchor.
           anchorDay: input.date !== existing.date ? undefined : existing.anchorDay,
         };
-        updated.notificationId = await scheduleFor(updated);
-        return current.map((t) => (t.id === id ? updated : t));
+        return {
+          next: current.map((t) => (t.id === id ? updated : t)),
+          cancel: [existing],
+          schedule: [id],
+        };
       }),
     [mutate]
   );
@@ -460,13 +522,12 @@ export function useTasks() {
    */
   const deleteTask = useCallback(
     (id: string) =>
-      mutate(async (current) => {
+      mutate((current) => {
         const existing = current.find((t) => t.id === id);
         if (!existing) return null;
         const doomed = [existing, ...(existing.recurrence !== 'none' ? undoneSuccessors(current, existing) : [])];
-        for (const t of doomed) await cancelFor(t);
         const ids = new Set(doomed.map((t) => t.id));
-        return current.filter((t) => !ids.has(t.id));
+        return { next: current.filter((t) => !ids.has(t.id)), cancel: doomed };
       }),
     [mutate]
   );
@@ -478,12 +539,11 @@ export function useTasks() {
    */
   const toggleDone = useCallback(
     (id: string) =>
-      mutate(async (current) => {
+      mutate((current) => {
         const task = current.find((t) => t.id === id);
         if (!task) return null;
 
         if (!task.done) {
-          await cancelFor(task);
           const updated: Task = { ...task, done: true, notificationId: null, nextId: undefined };
           let spawned: Task | null = null;
 
@@ -510,21 +570,26 @@ export function useTasks() {
                 anchorDay,
                 createdAt: new Date().toISOString(),
               };
-              spawned.notificationId = await scheduleFor(spawned);
               updated.nextId = spawned.id;
             }
           }
           const next = current.map((t) => (t.id === id ? updated : t));
-          return spawned ? [spawned, ...next] : next;
+          return {
+            next: spawned ? [spawned, ...next] : next,
+            cancel: [task],
+            schedule: spawned ? [spawned.id] : [],
+          };
         }
 
         const updated: Task = { ...task, done: false, nextId: undefined, notificationId: null };
-        updated.notificationId = await scheduleFor(updated);
         // Remove the instance this tick created, so the task isn't duplicated.
         const spawned = task.nextId ? current.find((t) => t.id === task.nextId) : undefined;
         const removeId = spawned && !spawned.done ? spawned.id : null;
-        if (spawned && removeId) await cancelFor(spawned);
-        return current.filter((t) => t.id !== removeId).map((t) => (t.id === id ? updated : t));
+        return {
+          next: current.filter((t) => t.id !== removeId).map((t) => (t.id === id ? updated : t)),
+          cancel: spawned && removeId ? [spawned] : [],
+          schedule: [id],
+        };
       }),
     [mutate]
   );

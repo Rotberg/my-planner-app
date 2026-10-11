@@ -132,14 +132,16 @@ export default function TaskForm({
   }
 
   function confirmDelete() {
-    const isSeries = task && task.recurrence !== 'none';
+    // Deleting the live instance of a repeating task ends the series; deleting
+    // a completed one only removes that entry.
+    const isSeries = task && task.recurrence !== 'none' && !task.done;
     Alert.alert(
       isSeries ? 'Delete repeating task' : 'Delete task',
       isSeries
         ? 'This deletes the task and all of its future repeats. Completed past instances are kept.'
         : 'Are you sure you want to delete this task?',
       [
-      { text: 'Cancel', style: 'cancel' },
+        { text: 'Cancel', style: 'cancel' },
         { text: 'Delete', style: 'destructive', onPress: onDelete },
       ]
     );

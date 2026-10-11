@@ -55,7 +55,7 @@ export function newId() {
 
 // ─── Corruption recovery ─────────────────────────────────────────────────────
 
-type CorruptionListener = (table: TableName, backupKey: string) => void;
+type CorruptionListener = (label: string, backupKey: string) => void;
 const corruptionListeners = new Set<CorruptionListener>();
 
 /** Called when a table had to be reset because its stored value was unreadable. */
@@ -66,16 +66,22 @@ export function onTableRecovered(listener: CorruptionListener) {
   };
 }
 
-async function quarantine(table: TableName, raw: string) {
-  const backupKey = `${storageKey(table)}:corrupt:${Date.now()}`;
+/**
+ * Moves an unreadable stored value to a backup key and removes it, then tells
+ * listeners. `label` is shown to the user (e.g. a table name). Callers must
+ * only run this while holding that key's write queue, so a concurrent write
+ * can't be deleted and the user isn't alerted twice.
+ */
+export async function quarantineKey(key: string, label: string, raw: string) {
+  const backupKey = `${key}:corrupt:${Date.now()}`;
   try {
     await AsyncStorage.setItem(backupKey, raw);
   } catch {
     // Keeping the app usable matters more than the backup.
   }
-  await AsyncStorage.removeItem(storageKey(table));
-  console.warn(`[localDb] ${table} was unreadable; reset it and kept a copy at ${backupKey}`);
-  corruptionListeners.forEach((l) => l(table, backupKey));
+  await AsyncStorage.removeItem(key);
+  console.warn(`[localDb] ${label} was unreadable; reset it and kept a copy at ${backupKey}`);
+  corruptionListeners.forEach((l) => l(label, backupKey));
 }
 
 // ─── Reading ─────────────────────────────────────────────────────────────────
@@ -109,7 +115,10 @@ function ensureSeeded(table: TableName): Promise<void> {
   return p;
 }
 
-async function read(table: TableName): Promise<Row[]> {
+const CORRUPT = Symbol('corrupt');
+
+/** Parses a stored table. Returns CORRUPT (with the raw value) instead of throwing. */
+async function readRaw(table: TableName): Promise<Row[] | { [CORRUPT]: string }> {
   await ensureSeeded(table);
   const raw = await AsyncStorage.getItem(storageKey(table));
   if (raw == null) return [];
@@ -119,7 +128,14 @@ async function read(table: TableName): Promise<Row[]> {
   } catch {
     // fall through
   }
-  await quarantine(table, raw);
+  return { [CORRUPT]: raw };
+}
+
+/** Reads a table. Must be called while holding the table's write queue. */
+async function readLocked(table: TableName): Promise<Row[]> {
+  const result = await readRaw(table);
+  if (Array.isArray(result)) return result;
+  await quarantineKey(storageKey(table), table.replace(/_/g, ' '), result[CORRUPT]);
   return [];
 }
 
@@ -141,7 +157,7 @@ type Tables = Partial<Record<TableName, Row[]>>;
 function mutateMany<T>(tables: TableName[], fn: (current: Tables) => { changed: Tables; result: T }): Promise<T> {
   return enqueueWrite(tables, async () => {
     const current: Tables = {};
-    for (const t of tables) current[t] = await read(t);
+    for (const t of tables) current[t] = await readLocked(t);
     const { changed, result } = fn(current);
     const entries = (Object.keys(changed) as TableName[]).map(
       (t) => [storageKey(t), JSON.stringify(changed[t])] as [string, string]
@@ -166,7 +182,10 @@ export async function selectRows<T extends Row = Row>(
   opts: { where?: (row: T) => boolean; orderBy?: keyof T & string; ascending?: boolean } = {}
 ): Promise<T[]> {
   await (writeQueues.get(table) ?? Promise.resolve()).catch(() => {});
-  let rows = (await read(table)) as T[];
+  const result = await readRaw(table);
+  // Reads run outside the queue. A corrupt table is only reset inside it, so
+  // the reset can't delete a write that landed in the meantime.
+  let rows = (Array.isArray(result) ? result : await enqueueWrite([table], () => readLocked(table))) as T[];
   if (opts.where) rows = rows.filter(opts.where);
   if (opts.orderBy) {
     const key = opts.orderBy;
@@ -202,12 +221,12 @@ export function insertRows<T extends Row = Row>(table: TableName, rows: NewRow<T
  * one write, so a failure can't leave a parent without its children.
  * The child rows get the parent's id in `foreignKey`.
  */
-export function insertWithChildren<P extends Row = Row, C extends Row = Row>(
+export function insertWithChildren<P extends Row = Row, C extends Row = Row, K extends string = string>(
   parentTable: TableName,
   parent: NewRow<P>,
   childTable: TableName,
-  foreignKey: string,
-  children: Omit<NewRow<C>, typeof foreignKey>[]
+  foreignKey: K,
+  children: Omit<NewRow<C>, K>[]
 ): Promise<{ parent: P; children: C[] }> {
   const [createdParent] = stamp<P>([parent]);
   const createdChildren = stamp<C>(
@@ -237,8 +256,9 @@ export function upsertByName(table: TableName, name: string): Promise<void> {
 }
 
 /**
- * Deletes matching rows. Where a cascade is defined, child rows are removed in
- * the same write, along with any children already orphaned by older deletes.
+ * Deletes matching rows. Where a cascade is defined, the removed rows' children
+ * are deleted in the same write. Other child rows are never touched, even if
+ * their parent is missing (e.g. after a parent table was reset).
  */
 export function deleteRows(table: TableName, where: (row: Row) => boolean): Promise<void> {
   const cascade = CASCADES[table];
@@ -246,9 +266,14 @@ export function deleteRows(table: TableName, where: (row: Row) => boolean): Prom
     return mutate(table, (current) => ({ rows: current.filter((r) => !where(r)), result: undefined }));
   }
   return mutateMany([table, cascade.table], (current) => {
-    const kept = current[table]!.filter((r) => !where(r));
-    const keptIds = new Set(kept.map((r) => r.id));
-    const children = current[cascade.table]!.filter((c) => keptIds.has(c[cascade.foreignKey]));
-    return { changed: { [table]: kept, [cascade.table]: children }, result: undefined };
+    const parents = current[table]!;
+    const removedIds = new Set(parents.filter(where).map((r) => r.id));
+    if (removedIds.size === 0) return { changed: {}, result: undefined };
+    const kept = parents.filter((r) => !removedIds.has(r.id));
+    const children = current[cascade.table]!;
+    const keptChildren = children.filter((c) => !removedIds.has(c[cascade.foreignKey]));
+    const changed: Tables = { [table]: kept };
+    if (keptChildren.length !== children.length) changed[cascade.table] = keptChildren;
+    return { changed, result: undefined };
   });
 }

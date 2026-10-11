@@ -41,7 +41,11 @@ export default function StepsCard() {
   // Overlapping refreshes (focus + app resume + after granting permission)
   // share one in-flight run instead of reading Health Connect several times.
   const inFlight = useRef<Promise<void> | null>(null);
-  const refresh = useCallback(() => {
+  /** `fresh` waits for any refresh already running, then always starts a new one. */
+  const refresh = useCallback((fresh = false): Promise<void> => {
+    if (fresh && inFlight.current) {
+      return inFlight.current.then(() => refresh(true));
+    }
     if (!inFlight.current) {
       inFlight.current = (async () => {
         const s = await getStepsStatus();
@@ -79,7 +83,9 @@ export default function StepsCard() {
 
   async function connect() {
     await requestStepsPermission();
-    await refresh();
+    // A refresh may already be running from the app resuming, started before
+    // the grant was visible. Always check again afterwards.
+    await refresh(true);
   }
 
   function submitGoal() {
@@ -103,6 +109,20 @@ export default function StepsCard() {
           Step tracking needs the installed app build, because it uses Health Connect. It isn&apos;t
           available when running in Expo Go.
         </Text>
+      </View>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <View className={card}>
+        <Text className="text-sm font-bold text-stone-700 dark:text-stone-200 mb-1">Steps</Text>
+        <Text className="text-xs text-stone-500 dark:text-stone-400 mb-3">
+          Couldn&apos;t reach Health Connect just now.
+        </Text>
+        <TouchableOpacity className="bg-teal-600 rounded-lg py-2.5 items-center" onPress={() => refresh(true)}>
+          <Text className="text-white text-sm font-bold">Try again</Text>
+        </TouchableOpacity>
       </View>
     );
   }

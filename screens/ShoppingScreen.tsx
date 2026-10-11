@@ -364,7 +364,13 @@ export default function ShoppingScreen() {
       }
     } catch (e) {
       console.error('Failed to update favourites:', e);
-      persist(items.map((i) => (i.id === item.id ? { ...i, favorited: !nowFavorited } : i)));
+      // Roll back against the latest list, not the snapshot from before the
+      // await, so changes made in the meantime aren't lost.
+      setItems((latest) => {
+        const reverted = latest.map((i) => (i.id === item.id ? { ...i, favorited: !nowFavorited } : i));
+        saveData(STORAGE_KEY, reverted);
+        return reverted;
+      });
       Alert.alert('Could not update favourites', 'Saving to this device failed. Please try again.');
     }
     fetchFavorites();
