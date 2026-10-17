@@ -1,9 +1,20 @@
 import { useFocusEffect } from '@react-navigation/native';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, ScrollView, Text, TouchableOpacity, View, useColorScheme } from 'react-native';
+import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import TaskForm from '../components/TaskForm';
 import { buildMonthGrid } from '../utils/dates';
+import {
+  isSettled,
+  loadFinanceSettings,
+  Occurrence,
+  occurrenceAmount,
+  occurrencesInRange,
+  RecurringPayment,
+  Transaction,
+} from '../utils/finance';
+import { formatMoney } from '../utils/money';
 import { loadData, saveData } from '../utils/storage';
 import { Row, selectRows, updateRows } from '../utils/localDb';
 import {
@@ -45,7 +56,7 @@ type HealthStatRow = {
   notes: string | null;
 };
 
-type FilterKey = 'tasks' | 'repeating' | 'daily' | 'mustdo' | 'workouts' | 'health';
+type FilterKey = 'tasks' | 'repeating' | 'daily' | 'mustdo' | 'workouts' | 'health' | 'bills';
 
 /** Independent on/off filters. Daily repeats are off by default to avoid clutter. */
 const FILTERS: { key: FilterKey; label: string; color: string; defaultOn: boolean }[] = [
@@ -55,13 +66,15 @@ const FILTERS: { key: FilterKey; label: string; color: string; defaultOn: boolea
   { key: 'mustdo',    label: 'Must Do',   color: '#0d9488', defaultOn: true },  // teal
   { key: 'workouts',  label: 'Workouts',  color: '#c44569', defaultOn: true },  // rose
   { key: 'health',    label: 'Health',    color: '#0ea5e9', defaultOn: true },  // sky
+  // Only shown when "Show bills on the Planner" is on in Money settings.
+  { key: 'bills',     label: 'Bills',     color: '#059669', defaultOn: true },  // emerald
 ];
 
 type FilterState = Record<FilterKey, boolean>;
 
 const DEFAULT_FILTERS = Object.fromEntries(FILTERS.map((f) => [f.key, f.defaultOn])) as FilterState;
 
-const DOT_COLORS = { task: '#6366f1', workout: '#c44569', health: '#0ea5e9' };
+const DOT_COLORS = { task: '#6366f1', workout: '#c44569', health: '#0ea5e9', bill: '#059669' };
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -116,6 +129,9 @@ export default function PlannerScreen() {
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [healthStats, setHealthStats] = useState<HealthStatRow[]>([]);
   const [userHeight, setUserHeight] = useState<number | null>(null);
+  const [billsEnabled, setBillsEnabled] = useState(false);
+  const [bills, setBills] = useState<RecurringPayment[]>([]);
+  const [billTransactions, setBillTransactions] = useState<Transaction[]>([]);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
@@ -136,8 +152,26 @@ export default function PlannerScreen() {
       });
       fetchSessions();
       fetchHealthStats();
+      fetchBills();
     }, [])
   );
+
+  /** Bills are only read when the Money setting to show them here is on. */
+  async function fetchBills() {
+    try {
+      const settings = await loadFinanceSettings();
+      setBillsEnabled(settings.showBillsOnPlanner);
+      if (!settings.showBillsOnPlanner) return;
+      const [payments, transactions] = await Promise.all([
+        selectRows<RecurringPayment>('finance_recurring'),
+        selectRows<Transaction>('finance_transactions'),
+      ]);
+      setBills(payments.filter((p) => p.direction === 'out'));
+      setBillTransactions(transactions);
+    } catch (e) {
+      console.error('Failed to load bills:', e);
+    }
+  }
 
   async function fetchSessions() {
     try {
@@ -248,6 +282,12 @@ export default function PlannerScreen() {
   // ── Derived ─────────────────────────────────────────────────────────────────
 
   const calendarDays = buildMonthGrid(displayYear, displayMonth);
+  const showBills = billsEnabled && filters.bills;
+  const gridBillDays = new Set(
+    showBills
+      ? occurrencesInRange(bills, billTransactions, toYMD(calendarDays[0]), toYMD(calendarDays[41])).map((o) => o.due)
+      : []
+  );
 
   function visibleTasksOn(ymd: string): DatedTask[] {
     return tasksForDate(tasks, ymd).filter((d) => taskPassesFilters(d.task, d.projected, filters));
@@ -258,13 +298,15 @@ export default function PlannerScreen() {
     if (visibleTasksOn(ymd).length > 0) dots.push(DOT_COLORS.task);
     if (filters.workouts && sessions.some((s) => s.performed_at === ymd)) dots.push(DOT_COLORS.workout);
     if (filters.health && healthStats.some((s) => s.recorded_at === ymd)) dots.push(DOT_COLORS.health);
+    if (gridBillDays.has(ymd)) dots.push(DOT_COLORS.bill);
     return dots;
   }
 
   const dayTasks    = visibleTasksOn(selectedDate);
   const daySessions = filters.workouts ? sessions.filter((s) => s.performed_at === selectedDate) : [];
   const dayHealth   = filters.health ? healthStats.filter((s) => s.recorded_at === selectedDate) : [];
-  const dayHasAnything = dayTasks.length + daySessions.length + dayHealth.length > 0;
+  const dayBills    = showBills ? occurrencesInRange(bills, billTransactions, selectedDate, selectedDate) : [];
+  const dayHasAnything = dayTasks.length + daySessions.length + dayHealth.length + dayBills.length > 0;
   const isOnToday =
     selectedDate === todayYMD && displayMonth === today.getMonth() && displayYear === today.getFullYear();
 
@@ -338,6 +380,41 @@ export default function PlannerScreen() {
               {task.notes}
             </Text>
           ) : null}
+        </View>
+      </TouchableOpacity>
+    );
+  }
+
+  /** Read-only here; tapping opens the Money tab to tick it off or edit it. */
+  function renderBill(o: Occurrence) {
+    const settled = isSettled(o);
+    const overdue = !settled && o.due < todayYMD;
+    return (
+      <TouchableOpacity
+        key={`bill-${o.payment.id}-${o.due}`}
+        activeOpacity={0.7}
+        onPress={() => router.push('/money')}
+        className="flex-row items-start bg-white dark:bg-stone-800 rounded-[10px] p-3 mb-2.5 shadow-sm"
+      >
+        <View className="w-[68px] mr-2.5">
+          <Text className="text-xs font-bold text-emerald-700 dark:text-emerald-400">Bill</Text>
+        </View>
+        <View className="flex-1">
+          <View className="flex-row items-center" style={{ gap: 6 }}>
+            <Text className="text-[15px] font-semibold text-stone-800 dark:text-stone-100">{o.payment.name}</Text>
+            <View
+              className={`rounded-full px-2 py-0.5 border ${settled ? 'bg-emerald-50 border-emerald-100' : overdue ? 'bg-rose-50 border-rose-100' : 'bg-stone-50 border-stone-200'}`}
+            >
+              <Text
+                className={`text-[10px] font-semibold ${settled ? 'text-emerald-700' : overdue ? 'text-rose-700' : 'text-stone-600'}`}
+              >
+                {settled ? '✓ Paid' : overdue ? 'Overdue' : 'Due'}
+              </Text>
+            </View>
+          </View>
+          <Text className="text-[13px] text-stone-500 dark:text-stone-400 mt-[3px]">
+            {formatMoney(occurrenceAmount(o))} · {o.payment.category}
+          </Text>
         </View>
       </TouchableOpacity>
     );
@@ -499,7 +576,7 @@ export default function PlannerScreen() {
         style={{ flexGrow: 0, flexShrink: 0 }}
         contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 10, gap: 6, alignItems: 'center' }}
       >
-        {FILTERS.map((f) => {
+        {FILTERS.filter((f) => f.key !== 'bills' || billsEnabled).map((f) => {
           const on = filters[f.key];
           return (
             <TouchableOpacity
@@ -558,6 +635,7 @@ export default function PlannerScreen() {
             {dayTasks.map(renderTask)}
             {daySessions.map(renderSession)}
             {dayHealth.map(renderHealth)}
+            {dayBills.map(renderBill)}
           </>
         )}
       </ScrollView>

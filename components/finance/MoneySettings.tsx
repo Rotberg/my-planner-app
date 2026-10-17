@@ -1,5 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Pressable,
+  ScrollView,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { FinanceSettings } from '../../utils/finance';
 import { minorToInput, parseMoney } from '../../utils/money';
 import { useTheme } from '../../utils/theme';
@@ -22,12 +33,14 @@ export default function MoneySettings({ visible, settings, onSave, onClose }: Pr
   const [payday, setPayday] = useState(false);
   const [day, setDay] = useState('');
   const [buffer, setBuffer] = useState('');
+  const [onPlanner, setOnPlanner] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
     setPayday(settings.periodStartDay !== 1);
     setDay(settings.periodStartDay !== 1 ? String(settings.periodStartDay) : '');
     setBuffer(settings.bufferMinor > 0 ? minorToInput(settings.bufferMinor) : '');
+    setOnPlanner(settings.showBillsOnPlanner);
   }, [visible, settings]);
 
   function save() {
@@ -45,7 +58,7 @@ export default function MoneySettings({ visible, settings, onSave, onClose }: Pr
       Alert.alert('Invalid amount', 'Enter an amount like 100 or 100.00, or leave it empty for no buffer.');
       return;
     }
-    onSave({ periodStartDay, bufferMinor });
+    onSave({ periodStartDay, bufferMinor, showBillsOnPlanner: onPlanner });
   }
 
   const labelClass = 'text-xs font-semibold text-stone-500 dark:text-stone-400 mb-1.5';
@@ -130,6 +143,27 @@ export default function MoneySettings({ visible, settings, onSave, onClose }: Pr
                   value={buffer}
                   onChangeText={setBuffer}
                   keyboardType="decimal-pad"
+                />
+              </View>
+
+              {/* Planner */}
+              <View
+                className="flex-row items-center justify-between rounded-lg px-3 py-2 mb-5"
+                style={{ borderWidth: 1, borderColor: theme.border }}
+              >
+                <View className="flex-1 pr-3">
+                  <Text className="text-sm font-semibold" style={{ color: theme.text }}>
+                    Show bills on the Planner
+                  </Text>
+                  <Text className="text-[11px]" style={{ color: theme.placeholder }}>
+                    Adds a Bills filter to the Planner calendar
+                  </Text>
+                </View>
+                <Switch
+                  value={onPlanner}
+                  onValueChange={setOnPlanner}
+                  trackColor={{ true: '#14b8a6', false: theme.border }}
+                  thumbColor="#ffffff"
                 />
               </View>
 

@@ -14,7 +14,7 @@ import {
   View,
 } from 'react-native';
 import { fromYMD, todayYMD, toYMD } from '../../utils/dates';
-import { Transaction, UNEXPECTED_CATEGORIES, UnexpectedInput } from '../../utils/finance';
+import { Pot, Transaction, UNEXPECTED_CATEGORIES, UnexpectedInput } from '../../utils/finance';
 import { minorToInput, parseMoney } from '../../utils/money';
 import { useTheme } from '../../utils/theme';
 
@@ -24,13 +24,14 @@ type Props = {
   entry: Transaction | null;
   /** Pre-filled values for a new entry (from the quick-add bar). */
   draft?: { name: string; amount: string };
+  pots: Pot[];
   onSubmit: (input: UnexpectedInput) => void;
   onDelete?: () => void;
   onClose: () => void;
 };
 
 /** Add/edit sheet for an unexpected cost. */
-export default function UnexpectedForm({ visible, entry, draft, onSubmit, onDelete, onClose }: Props) {
+export default function UnexpectedForm({ visible, entry, draft, pots, onSubmit, onDelete, onClose }: Props) {
   const theme = useTheme();
 
   const [name, setName] = useState('');
@@ -38,6 +39,7 @@ export default function UnexpectedForm({ visible, entry, draft, onSubmit, onDele
   const [date, setDate] = useState(todayYMD());
   const [category, setCategory] = useState('Other');
   const [notes, setNotes] = useState('');
+  const [potId, setPotId] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const notesFocused = useRef(false);
@@ -50,6 +52,7 @@ export default function UnexpectedForm({ visible, entry, draft, onSubmit, onDele
     setDate(entry?.date ?? todayYMD());
     setCategory(entry?.category ?? 'Other');
     setNotes(entry?.notes ?? '');
+    setPotId(entry?.pot_id ?? null);
     setShowPicker(false);
   }, [visible, entry, draft]);
 
@@ -72,7 +75,15 @@ export default function UnexpectedForm({ visible, entry, draft, onSubmit, onDele
       Alert.alert('Invalid amount', 'Enter an amount like 12 or 12.99.');
       return;
     }
-    onSubmit({ name: name.trim(), amount_minor: amountMinor, date, category, notes: notes.trim() || undefined });
+    onSubmit({
+      name: name.trim(),
+      amount_minor: amountMinor,
+      date,
+      category,
+      notes: notes.trim() || undefined,
+      // A pot deleted since this was saved still counts as "from a pot".
+      pot_id: potId,
+    });
   }
 
   function confirmDelete() {
@@ -175,6 +186,34 @@ export default function UnexpectedForm({ visible, entry, draft, onSubmit, onDele
                   );
                 })}
               </View>
+
+              {(pots.length > 0 || potId) && (
+                <>
+                  <Text className={labelClass}>Paid from</Text>
+                  <View className="flex-row flex-wrap mb-1" style={{ gap: 6 }}>
+                    {[{ id: null, name: 'Buffer / everyday money' }, ...pots].map((p) => {
+                      const selected = potId === p.id;
+                      return (
+                        <Pressable
+                          key={p.id ?? 'buffer'}
+                          className="rounded-lg border-[1.5px] px-3 py-2 items-center"
+                          style={selected ? { backgroundColor: '#0d9488', borderColor: '#0d9488' } : { borderColor: theme.border }}
+                          onPress={() => setPotId(p.id)}
+                        >
+                          <Text
+                            className={`text-[12px] font-semibold ${selected ? 'text-white' : 'text-stone-500 dark:text-stone-400'}`}
+                          >
+                            {p.name}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <Text className="text-[11px] text-stone-400 dark:text-stone-500 mb-3">
+                    Costs paid from a pot come out of what you saved, not this month&apos;s money.
+                  </Text>
+                </>
+              )}
 
               <Text className={labelClass}>Notes</Text>
               <TextInput

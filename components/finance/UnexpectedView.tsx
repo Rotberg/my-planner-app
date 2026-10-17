@@ -1,15 +1,18 @@
 import React, { useState } from 'react';
 import { Alert, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { categoryColor, Period, Transaction, UnexpectedInput } from '../../utils/finance';
+import { categoryColor, Period, Pot, Transaction, UnexpectedInput } from '../../utils/finance';
 import { formatMoney, parseMoney } from '../../utils/money';
 import { useTheme } from '../../utils/theme';
 import { shortDate } from './OccurrenceRow';
+import UnexpectedChart from './UnexpectedChart';
 
 type Props = {
   transactions: Transaction[];
   period: Period;
   periodName: string;
   bufferMinor: number;
+  pots: Pot[];
+  periodStartDay: number;
   today: string;
   onQuickAdd: (input: UnexpectedInput) => Promise<boolean>;
   onMoreDetails: (draft: { name: string; amount: string }) => void;
@@ -24,6 +27,8 @@ export default function UnexpectedView({
   period,
   periodName,
   bufferMinor,
+  pots,
+  periodStartDay,
   today,
   onQuickAdd,
   onMoreDetails,
@@ -39,6 +44,9 @@ export default function UnexpectedView({
   const current = unexpected.filter((t) => t.date >= period.start && t.date <= period.end);
   const earlier = unexpected.filter((t) => t.date < period.start).slice(0, EARLIER_LIMIT);
   const total = current.reduce((s, t) => s + t.amount_minor, 0);
+  // Costs paid from a pot don't use up the buffer.
+  const fromBuffer = current.filter((t) => !t.pot_id).reduce((s, t) => s + t.amount_minor, 0);
+  const potName = (id: string) => pots.find((p) => p.id === id)?.name ?? 'a pot';
 
   async function quickAdd() {
     const amountMinor = parseMoney(amount);
@@ -72,6 +80,7 @@ export default function UnexpectedView({
           </Text>
           <Text className="text-xs text-stone-500 dark:text-stone-400">
             {shortDate(t.date)} · {t.category}
+            {t.pot_id ? ` · from ${potName(t.pot_id)}` : ''}
           </Text>
         </View>
         <Text className="text-[15px] font-semibold text-stone-800 dark:text-stone-100">
@@ -128,6 +137,8 @@ export default function UnexpectedView({
         </View>
       </View>
 
+      <UnexpectedChart transactions={transactions} period={period} periodStartDay={periodStartDay} />
+
       {/* ── This period ── */}
       <View className="flex-row items-baseline justify-between mb-2">
         <Text className="text-xs font-bold uppercase tracking-wide text-stone-500 dark:text-stone-400">
@@ -135,9 +146,14 @@ export default function UnexpectedView({
         </Text>
         <Text className="text-sm font-semibold text-stone-700 dark:text-stone-200">
           {formatMoney(total)}
-          {bufferMinor > 0 ? ` of ${formatMoney(bufferMinor)} buffer` : ''}
         </Text>
       </View>
+      {bufferMinor > 0 && (
+        <Text className="text-xs text-stone-500 dark:text-stone-400 -mt-1 mb-2">
+          {formatMoney(fromBuffer)} of your {formatMoney(bufferMinor)} buffer used
+          {total > fromBuffer ? ` · ${formatMoney(total - fromBuffer)} from pots` : ''}
+        </Text>
+      )}
       {current.length === 0 ? (
         <Text className="text-sm text-stone-500 dark:text-stone-400 mb-3">
           Nothing unexpected yet. Log car repairs, vet bills and other surprises here.

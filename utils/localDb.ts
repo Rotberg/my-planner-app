@@ -26,7 +26,9 @@ export type TableName =
   | 'workout_sessions'
   | 'workout_session_exercises'
   | 'finance_recurring'
-  | 'finance_transactions';
+  | 'finance_transactions'
+  | 'finance_pots'
+  | 'finance_pot_entries';
 
 export type Row = { id: string; created_at: string; [key: string]: any };
 
@@ -47,6 +49,7 @@ const CASCADES: Partial<Record<TableName, { table: TableName; foreignKey: string
   shopping_lists: { table: 'shopping_list_items', foreignKey: 'list_id' },
   workout_routines: { table: 'workout_routine_exercises', foreignKey: 'routine_id' },
   workout_sessions: { table: 'workout_session_exercises', foreignKey: 'session_id' },
+  finance_pots: { table: 'finance_pot_entries', foreignKey: 'pot_id' },
 };
 
 const storageKey = (table: TableName) => `db:${table}`;
