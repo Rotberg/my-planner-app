@@ -86,13 +86,13 @@ Matches a budget **period**, which defaults to the calendar month. The user can 
 └─────────────────────────────────┘
 ```
 
-**Left to spend** = income − all bills due in the period (paid or not) − pot contributions − unexpected spend in the period.
+**Left to spend** = income − all bills due in the period (paid or not) − set aside, where *set aside* = max(buffer, unexpected spend). Unexpected costs come out of the buffer first, so they're only subtracted again once they go over it. (Phase 4 adds sinking-fund contributions here.)
 **Per day** = left to spend ÷ days remaining in the period (including today).
 
 **Income is optional.** The Overview adapts to what the user has entered:
 
 - **With income items:** headline is **Left to spend** (as above), with an Income row.
-- **Without income:** headline becomes **Spent / committed this month** (bills + pots + unexpected). The Income row is hidden and a dismissible hint reads "Add your income to see what's left to spend". Once dismissed, the hint stays hidden (`finance:settings.hideIncomeHint`).
+- **Without income:** headline becomes **Spent and set aside** (bills + set aside). The Income row is hidden and a dismissible hint reads "Add your income to see what's left to spend". Once dismissed, the hint stays hidden (`finance:settings.hideIncomeHint`).
 
 ### 3.2 Bills (ongoing payments)
 
@@ -134,7 +134,7 @@ Keyboard handling: reuse whatever fix lands from `fix/keyboard-covers-note-task-
 
 Lives as a section on Overview (tap to manage), not its own segment, to keep 3 segments.
 
-- **Buffer pot** (one, built in): monthly amount for unexpected costs. Unspent money can roll over (setting, on by default).
+- **Buffer** (one, built in): amount set aside each period for unexpected costs. Stored in `finance:settings.bufferMinor` (phase 2). Roll-over of unspent buffer is deferred to phase 4, alongside the pots table.
 - **Sinking-fund pots:** name, target amount, target date. The app calculates **£/month needed** = (target − saved) ÷ months left (YNAB targets). Contributions are recorded automatically each period (planned money, not real transfers), and can be adjusted.
 - Examples to show in the empty state: "Car insurance £540 by March", "Christmas £400 by December", "MOT & service £250 by June".
 
@@ -204,14 +204,15 @@ Cascade: deleting a `finance_recurring` row should **not** delete its transactio
 
 A recurring payment has no stored "instances". For any period, `occurrencesBetween(payment, from, to)` generates its due dates from `anchor_date`/`anchor_day`/`frequency`, respecting `end_date` and `paused`.
 
-An occurrence is **paid** if a transaction exists with that `recurring_id` + `due_date`, and **skipped** if that transaction has `skipped: true`. Ticking a bill inserts the transaction, and unticking deletes it. Editing a bill's amount only affects future occurrences, because past ones are frozen in their transactions. This matches how `utils/tasks.ts` projects recurring tasks (`occursOn`, `nextOccurrence` with `anchorDay`).
+Occurrences due before the bill was added to the app are **assumed paid**: they count towards totals but are never overdue, and can't be unticked (there's no transaction to remove). An occurrence is **paid** if a transaction exists with that `recurring_id` + `due_date`, and **skipped** if that transaction has `skipped: true`. Ticking a bill inserts the transaction, and unticking deletes it. Editing a bill's amount only affects future occurrences, because past ones are frozen in their transactions. This matches how `utils/tasks.ts` projects recurring tasks (`occursOn`, `nextOccurrence` with `anchorDay`).
 
 ### 4.3 Settings
 
 Single AsyncStorage key `finance:settings` (via `utils/storage.js`, like shopping history):
 
 ```ts
-{ periodStartDay: 1, showBillsOnPlanner: false, defaultReminderDays: 3, hideIncomeHint: false }
+{ periodStartDay: 1, bufferMinor: 0, hideIncomeHint: false }   // phase 2
+// later: showBillsOnPlanner, defaultReminderDays
 ```
 
 Currency is **GBP only** for v1. `formatMoney` uses `Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' })`. All formatting goes through `utils/money.ts`, so adding a currency setting later is a one-file change.
