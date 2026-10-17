@@ -1,7 +1,8 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -81,6 +82,8 @@ export default function TaskForm({
   const [tags, setTags] = useState<string[]>([]);
   const [customTag, setCustomTag] = useState('');
   const [picker, setPicker] = useState<null | 'date' | 'start' | 'end'>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const notesFocused = useRef(false);
 
   // Reset the form every time it opens.
   useEffect(() => {
@@ -96,6 +99,15 @@ export default function TaskForm({
     setCustomTag('');
     setPicker(null);
   }, [visible, task, defaultDate]);
+
+  // Notes sits at the bottom of the sheet, so once the keyboard has finished
+  // opening, scroll it back into view above the keyboard.
+  useEffect(() => {
+    const sub = Keyboard.addListener('keyboardDidShow', () => {
+      if (notesFocused.current) scrollRef.current?.scrollToEnd({ animated: true });
+    });
+    return () => sub.remove();
+  }, []);
 
   const mustDo = tags.includes(MUST_DO_TAG);
 
@@ -155,8 +167,10 @@ export default function TaskForm({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      {/* Android is edge-to-edge, so the window no longer resizes for the
+          keyboard; pad on both platforms to keep the sheet above it. */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
         style={{ flex: 1 }}
       >
         <Pressable className="flex-1 justify-end" style={{ backgroundColor: theme.modalBackdrop }} onPress={onClose}>
@@ -166,6 +180,7 @@ export default function TaskForm({
             onPress={() => {}}
           >
             <ScrollView
+              ref={scrollRef}
               contentContainerStyle={{ padding: 20, paddingBottom: 36 }}
               keyboardShouldPersistTaps="handled"
             >
@@ -401,6 +416,15 @@ export default function TaskForm({
                 placeholderTextColor={theme.placeholder}
                 value={notes}
                 onChangeText={setNotes}
+                onFocus={() => {
+                  notesFocused.current = true;
+                  // Keyboard may already be open from another field, in which
+                  // case keyboardDidShow won't fire again.
+                  setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+                }}
+                onBlur={() => {
+                  notesFocused.current = false;
+                }}
                 multiline
                 textAlignVertical="top"
               />
