@@ -5,6 +5,7 @@ import { Alert } from 'react-native';
 import { cancelEventNotification, scheduleEventNotification } from './notifications';
 import { fromYMD, toYMD, todayYMD } from './dates';
 import { newId, quarantineKey } from './localDb';
+import { addMonthsClamped, daysInMonth } from './recurrence';
 import { loadData, saveData } from './storage';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -112,10 +113,6 @@ export function formatTimeRange(task: Pick<Task, 'startTime' | 'endTime'>, is24H
     : formatTime(task.startTime, is24Hour);
 }
 
-function daysInMonth(year: number, month: number) {
-  return new Date(year, month + 1, 0).getDate();
-}
-
 /**
  * Next date for a recurring task. Monthly repeats on `anchorDay` (default: the
  * date's own day), clamped to the end of shorter months without drifting.
@@ -124,12 +121,7 @@ export function nextOccurrence(ymd: string, recurrence: Recurrence, anchorDay?: 
   const d = fromYMD(ymd);
   if (recurrence === 'daily') d.setDate(d.getDate() + 1);
   else if (recurrence === 'weekly') d.setDate(d.getDate() + 7);
-  else if (recurrence === 'monthly') {
-    const day = anchorDay ?? d.getDate();
-    const y = d.getMonth() === 11 ? d.getFullYear() + 1 : d.getFullYear();
-    const m = (d.getMonth() + 1) % 12;
-    return toYMD(new Date(y, m, Math.min(day, daysInMonth(y, m))));
-  }
+  else if (recurrence === 'monthly') return addMonthsClamped(ymd, 1, anchorDay);
   return toYMD(d);
 }
 

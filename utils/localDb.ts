@@ -24,7 +24,9 @@ export type TableName =
   | 'workout_routines'
   | 'workout_routine_exercises'
   | 'workout_sessions'
-  | 'workout_session_exercises';
+  | 'workout_session_exercises'
+  | 'finance_recurring'
+  | 'finance_transactions';
 
 export type Row = { id: string; created_at: string; [key: string]: any };
 
@@ -258,6 +260,23 @@ export function insertWithChildren<P extends Row = Row, C extends Row = Row, K e
     },
     result: { parent: createdParent, children: createdChildren },
   }));
+}
+
+/**
+ * Inserts `row` unless a row matching `exists` is already stored. Checked
+ * inside the write queue, so a quick double tap can't add it twice.
+ * Resolves to the stored row, or null if one already existed.
+ */
+export function insertRowUnless<T extends Row = Row>(
+  table: TableName,
+  exists: (row: T) => boolean,
+  row: NewRow<T>
+): Promise<T | null> {
+  return mutate(table, (current) => {
+    if ((current as T[]).some(exists)) return { rows: current, result: null };
+    const [created] = stamp<T>([row]);
+    return { rows: [...current, created], result: created };
+  });
 }
 
 /** Inserts a row with this name unless one exists (case-insensitive). */

@@ -46,6 +46,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="money"
+        options={{
+          title: 'Money',
+          tabBarIcon: ({ color }) => <IconSymbol size={28} name="sterlingsign.circle.fill" color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="health"
         options={{
           title: 'Health',

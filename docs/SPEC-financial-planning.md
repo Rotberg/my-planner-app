@@ -119,7 +119,6 @@ Matches a budget **period**, which defaults to the calendar month. The user can 
 |---|---|
 | Name | Required. Suggestions from previous names (same idea as shopping history). |
 | Amount | Required. Numeric keypad, currency prefix. |
-| Type | Bill · Subscription · Loan/credit · Savings transfer · **Income** |
 | Frequency | Weekly · Fortnightly · Every 4 weeks · Monthly · Quarterly · Yearly |
 | Next due date | Date picker. This is the anchor for the series. |
 | Ends | Never (default) · On date · After N payments (loans, phone contracts) |
@@ -127,7 +126,7 @@ Matches a budget **period**, which defaults to the calendar month. The user can 
 | Reminder | Off · On the day · 1 / **3** (default) / 7 days before |
 | Notes | Optional. |
 
-**Income** reuses the same form with `type: 'income'`, so a salary on the 25th is just a recurring item. "Every 4 weeks" and "fortnightly" exist because UK pay and some bills run on those cycles.
+**Income** (phase 2) reuses the same form with `direction: 'in'`, so a salary on the 25th is just a recurring item. "Every 4 weeks" and "fortnightly" exist because UK pay and some bills run on those cycles.
 
 Keyboard handling: reuse whatever fix lands from `fix/keyboard-covers-note-task-input` (`TaskForm`) so the amount and notes inputs aren't hidden.
 
@@ -162,12 +161,10 @@ type Frequency = 'weekly' | 'fortnightly' | 'four_weekly' | 'monthly' | 'quarter
 type RecurringPayment = Row & {
   name: string;
   amount_minor: number;
-  type: 'bill' | 'subscription' | 'debt' | 'savings' | 'income';
+  direction: 'out' | 'in';      // bills vs income; category covers bill/subscription/debt
   frequency: Frequency;
-  anchor_date: string;          // first/next due date, YYYY-MM-DD
-  anchor_day?: number;          // day of month for monthly+ (31 → clamps to month end)
-  end_date?: string | null;
-  remaining_payments?: number | null;
+  anchor_date: string;          // first due date, YYYY-MM-DD; its day is kept for monthly+ (31 → clamps)
+  end_date: string | null;      // "after N payments" is converted to an end date when saved
   category: string;
   remind_days_before: number | null;   // null = off
   notification_id?: string | null;
@@ -205,7 +202,7 @@ Cascade: deleting a `finance_recurring` row should **not** delete its transactio
 
 ### 4.2 Occurrences are computed, not stored
 
-A recurring payment has no stored "instances". For any period, `occurrencesBetween(payment, from, to)` generates its due dates from `anchor_date`/`anchor_day`/`frequency`, respecting `end_date`, `remaining_payments` and `paused`.
+A recurring payment has no stored "instances". For any period, `occurrencesBetween(payment, from, to)` generates its due dates from `anchor_date`/`anchor_day`/`frequency`, respecting `end_date` and `paused`.
 
 An occurrence is **paid** if a transaction exists with that `recurring_id` + `due_date`, and **skipped** if that transaction has `skipped: true`. Ticking a bill inserts the transaction, and unticking deletes it. Editing a bill's amount only affects future occurrences, because past ones are frozen in their transactions. This matches how `utils/tasks.ts` projects recurring tasks (`occursOn`, `nextOccurrence` with `anchorDay`).
 
