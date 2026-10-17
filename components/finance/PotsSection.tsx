@@ -1,7 +1,7 @@
 import React from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
 import { fromYMD } from '../../utils/dates';
-import { Period, Pot, potAmountFor, potBalance, PotEntry, Transaction } from '../../utils/finance';
+import { Period, Pot, potAmountInPeriod, potBalance, PotEntry, Transaction } from '../../utils/finance';
 import { formatMoney } from '../../utils/money';
 
 type Props = {
@@ -10,6 +10,7 @@ type Props = {
   transactions: Transaction[];
   period: Period;
   periodStartDay: number;
+  today: string;
   onOpen: (pot: Pot) => void;
   onAdd: () => void;
 };
@@ -17,7 +18,7 @@ type Props = {
 const BAR = '#0d9488';
 
 /** Savings pots with how much is saved and what goes in each month. */
-export default function PotsSection({ pots, entries, transactions, period, periodStartDay, onOpen, onAdd }: Props) {
+export default function PotsSection({ pots, entries, transactions, period, periodStartDay, today, onOpen, onAdd }: Props) {
   return (
     <View className="mb-3">
       <View className="flex-row items-center justify-between mb-2">
@@ -41,15 +42,7 @@ export default function PotsSection({ pots, entries, transactions, period, perio
       ) : (
         pots.map((pot) => {
           const balance = potBalance(pot, entries, transactions);
-          // What went in this period if it's been recorded, otherwise what's planned.
-          const recorded = entries.find(
-            (e) =>
-              e.pot_id === pot.id &&
-              e.kind === 'contribution' &&
-              e.period_start >= period.start &&
-              e.period_start <= period.end
-          );
-          const monthly = recorded?.amount_minor ?? potAmountFor(pot, balance, period, periodStartDay);
+          const monthly = potAmountInPeriod(pot, entries, transactions, period, today, periodStartDay);
           const reached = pot.target_minor != null && balance >= pot.target_minor;
           const pct = pot.target_minor ? Math.max(0, Math.min(100, (balance / pot.target_minor) * 100)) : null;
           const by = pot.target_date

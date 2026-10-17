@@ -147,7 +147,9 @@ export default function OverviewView({
             s.buffer > 0
               ? s.unexpected > s.buffer
                 ? `Unexpected costs went ${formatMoney(s.unexpected - s.buffer)} over your buffer`
-                : `${s.unexpectedCount} unexpected ${s.unexpectedCount === 1 ? 'cost' : 'costs'} so far`
+                : `${s.unexpectedCount} ${s.unexpectedCount === 1 ? 'cost' : 'costs'} from your buffer so far`
+              : s.fromPots > 0
+              ? `${s.unexpectedCount} this period, not counting those paid from pots`
               : `${s.unexpectedCount} this period`
           )}
           {(s.pots > 0 || pots.length > 0) &&
@@ -215,6 +217,7 @@ export default function OverviewView({
         transactions={transactions}
         period={period}
         periodStartDay={startDay}
+        today={today}
         onOpen={onOpenPot}
         onAdd={onAddPot}
       />

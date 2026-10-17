@@ -13,10 +13,11 @@ import {
   View,
 } from 'react-native';
 import { fromYMD, todayYMD, toYMD } from '../../utils/dates';
-import { Period, Pot, PotInput, potAmountFor } from '../../utils/finance';
+import { Period, Pot, PotInput, potAmountFor, shiftPeriod } from '../../utils/finance';
 import { formatMoney, minorToInput, parseMoney } from '../../utils/money';
 import { addMonthsClamped } from '../../utils/recurrence';
 import { useTheme } from '../../utils/theme';
+import Chip from './Chip';
 
 type Props = {
   visible: boolean;
@@ -62,7 +63,9 @@ export default function PotForm({ visible, pot, balance, period, periodStartDay,
       ? potAmountFor(
           { auto: true, target_minor: targetMinor, target_date: date, monthly_minor: 0 } as Pot,
           pot ? balance : 0,
-          period,
+          // A new pot's first money goes in this period. An existing pot has
+          // already had this period's, so preview the next one.
+          pot ? shiftPeriod(period, 1, periodStartDay) : period,
           periodStartDay
         )
       : null;
@@ -125,24 +128,6 @@ export default function PotForm({ visible, pot, balance, period, periodStartDay,
   const labelClass = 'text-xs font-semibold text-stone-500 dark:text-stone-400 mb-1.5';
   const hintClass = 'text-[11px] text-stone-400 dark:text-stone-500 mb-3';
 
-  function Chip({ label, selected, onPress, disabled }: { label: string; selected: boolean; onPress: () => void; disabled?: boolean }) {
-    return (
-      <Pressable
-        className="flex-1 py-2 rounded-lg border-[1.5px] items-center"
-        style={[
-          selected ? { backgroundColor: '#0d9488', borderColor: '#0d9488' } : { borderColor: theme.border },
-          disabled ? { opacity: 0.4 } : null,
-        ]}
-        disabled={disabled}
-        onPress={onPress}
-      >
-        <Text className={`text-[12px] font-semibold ${selected ? 'text-white' : 'text-stone-500 dark:text-stone-400'}`}>
-          {label}
-        </Text>
-      </Pressable>
-    );
-  }
-
   function MoneyInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
     return (
       <View className={`flex-row items-center ${fieldClass} mb-1`} style={{ paddingVertical: 0 }}>
@@ -188,8 +173,8 @@ export default function PotForm({ visible, pot, balance, period, periodStartDay,
 
               <Text className={labelClass}>Needed by</Text>
               <View className="flex-row mb-2" style={{ gap: 6 }}>
-                <Chip label="A date" selected={hasDate} onPress={() => setHasDate(true)} />
-                <Chip label="No date" selected={!hasDate} onPress={() => setHasDate(false)} />
+                <Chip fill label="A date" selected={hasDate} onPress={() => setHasDate(true)} />
+                <Chip fill label="No date" selected={!hasDate} onPress={() => setHasDate(false)} />
               </View>
               {hasDate && (
                 <TouchableOpacity className={`${fieldClass} mb-3`} onPress={() => setShowPicker(true)}>
@@ -214,8 +199,8 @@ export default function PotForm({ visible, pot, balance, period, periodStartDay,
 
               <Text className={`${labelClass} mt-1`}>Each month</Text>
               <View className="flex-row mb-2" style={{ gap: 6 }}>
-                <Chip label="Work it out" selected={auto && canAuto} disabled={!canAuto} onPress={() => setAuto(true)} />
-                <Chip label="Fixed amount" selected={!auto || !canAuto} onPress={() => setAuto(false)} />
+                <Chip fill label="Work it out" selected={auto && canAuto} disabled={!canAuto} onPress={() => setAuto(true)} />
+                <Chip fill label="Fixed amount" selected={!auto || !canAuto} onPress={() => setAuto(false)} />
               </View>
               {auto && canAuto ? (
                 <Text className={hintClass}>

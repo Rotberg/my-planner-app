@@ -17,6 +17,7 @@ import { fromYMD, todayYMD, toYMD } from '../../utils/dates';
 import { Pot, Transaction, UNEXPECTED_CATEGORIES, UnexpectedInput } from '../../utils/finance';
 import { minorToInput, parseMoney } from '../../utils/money';
 import { useTheme } from '../../utils/theme';
+import Chip from './Chip';
 
 type Props = {
   visible: boolean;
@@ -168,46 +169,24 @@ export default function UnexpectedForm({ visible, entry, draft, pots, onSubmit, 
 
               <Text className={labelClass}>Category</Text>
               <View className="flex-row flex-wrap mb-3" style={{ gap: 6 }}>
-                {UNEXPECTED_CATEGORIES.map((c) => {
-                  const selected = category === c.name;
-                  return (
-                    <Pressable
-                      key={c.name}
-                      className="rounded-lg border-[1.5px] px-3 py-2 items-center"
-                      style={selected ? { backgroundColor: c.color, borderColor: c.color } : { borderColor: theme.border }}
-                      onPress={() => setCategory(c.name)}
-                    >
-                      <Text
-                        className={`text-[12px] font-semibold ${selected ? 'text-white' : 'text-stone-500 dark:text-stone-400'}`}
-                      >
-                        {c.name}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
+                {UNEXPECTED_CATEGORIES.map((c) => (
+                  <Chip
+                    key={c.name}
+                    label={c.name}
+                    color={c.color}
+                    selected={category === c.name}
+                    onPress={() => setCategory(c.name)}
+                  />
+                ))}
               </View>
 
               {(pots.length > 0 || potId) && (
                 <>
                   <Text className={labelClass}>Paid from</Text>
                   <View className="flex-row flex-wrap mb-1" style={{ gap: 6 }}>
-                    {[{ id: null, name: 'Buffer / everyday money' }, ...pots].map((p) => {
-                      const selected = potId === p.id;
-                      return (
-                        <Pressable
-                          key={p.id ?? 'buffer'}
-                          className="rounded-lg border-[1.5px] px-3 py-2 items-center"
-                          style={selected ? { backgroundColor: '#0d9488', borderColor: '#0d9488' } : { borderColor: theme.border }}
-                          onPress={() => setPotId(p.id)}
-                        >
-                          <Text
-                            className={`text-[12px] font-semibold ${selected ? 'text-white' : 'text-stone-500 dark:text-stone-400'}`}
-                          >
-                            {p.name}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
+                    {[{ id: null, name: 'Buffer / everyday money' }, ...pots].map((p) => (
+                      <Chip key={p.id ?? 'buffer'} label={p.name} selected={potId === p.id} onPress={() => setPotId(p.id)} />
+                    ))}
                   </View>
                   <Text className="text-[11px] text-stone-400 dark:text-stone-500 mb-3">
                     Costs paid from a pot come out of what you saved, not this month&apos;s money.

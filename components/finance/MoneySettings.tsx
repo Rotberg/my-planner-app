@@ -14,6 +14,7 @@ import {
 import { FinanceSettings } from '../../utils/finance';
 import { minorToInput, parseMoney } from '../../utils/money';
 import { useTheme } from '../../utils/theme';
+import Chip from './Chip';
 
 type Props = {
   visible: boolean;
@@ -84,21 +85,9 @@ export default function MoneySettings({ visible, settings, onSave, onClose }: Pr
                 {([
                   [false, 'Calendar month'],
                   [true, 'Payday to payday'],
-                ] as const).map(([value, label]) => {
-                  const selected = payday === value;
-                  return (
-                    <Pressable
-                      key={label}
-                      className="flex-1 py-2 rounded-lg border-[1.5px] items-center"
-                      style={selected ? { backgroundColor: '#0d9488', borderColor: '#0d9488' } : { borderColor: theme.border }}
-                      onPress={() => setPayday(value)}
-                    >
-                      <Text className={`text-[12px] font-semibold ${selected ? 'text-white' : 'text-stone-500 dark:text-stone-400'}`}>
-                        {label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
+                ] as const).map(([value, label]) => (
+                  <Chip key={label} fill label={label} selected={payday === value} onPress={() => setPayday(value)} />
+                ))}
               </View>
               {payday ? (
                 <>

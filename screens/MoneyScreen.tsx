@@ -117,7 +117,10 @@ export default function MoneyScreen() {
       return;
     }
     if (!(await finance.updatePot(editingPot.id, input))) return;
-    if (newBalance != null && !(await finance.setPotBalance(editingPot, editingPotBalance, newBalance))) return;
+    // Only correct the saved amount if the user changed it in the form.
+    if (newBalance != null && newBalance !== editingPotBalance && !(await finance.setPotBalance(editingPot, newBalance))) {
+      return;
+    }
     setPotOpen(false);
   }
 
