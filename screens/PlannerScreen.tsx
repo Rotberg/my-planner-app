@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, ScrollView, Text, TouchableOpacity, View, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import TaskForm from '../components/TaskForm';
+import { buildMonthGrid } from '../utils/dates';
 import { loadData, saveData } from '../utils/storage';
 import { Row, selectRows, updateRows } from '../utils/localDb';
 import {
@@ -68,18 +69,6 @@ const MONTH_NAMES = [
 ];
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-/** Returns 42 dates (6 weeks) starting from the Sunday of the week that contains the 1st of the month. */
-function buildMonthGrid(year: number, month: number): Date[] {
-  const firstOfMonth = new Date(year, month, 1);
-  const startDow = firstOfMonth.getDay(); // 0 = Sun
-  const gridStart = new Date(year, month, 1 - startDow);
-  return Array.from({ length: 42 }, (_, i) => {
-    const d = new Date(gridStart);
-    d.setDate(gridStart.getDate() + i);
-    return d;
-  });
-}
 
 function bmi(weightKg: number, heightCm: number) {
   const m = heightCm / 100;

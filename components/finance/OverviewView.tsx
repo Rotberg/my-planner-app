@@ -14,7 +14,7 @@ import {
 } from '../../utils/finance';
 import { formatMoney } from '../../utils/money';
 import { addDays, daysBetween } from '../../utils/recurrence';
-import { OccurrenceRow } from './BillsView';
+import { OccurrenceRow } from './OccurrenceRow';
 
 type Props = {
   payments: RecurringPayment[];

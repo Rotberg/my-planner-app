@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Pressable, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Alert, Platform, Pressable, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import BillForm from '../components/finance/BillForm';
 import BillsView from '../components/finance/BillsView';
@@ -8,6 +8,7 @@ import OverviewView from '../components/finance/OverviewView';
 import UnexpectedForm from '../components/finance/UnexpectedForm';
 import UnexpectedView from '../components/finance/UnexpectedView';
 import { IconSymbol } from '../components/ui/icon-symbol';
+import { syncBillReminders } from '../utils/billReminders';
 import { todayYMD } from '../utils/dates';
 import {
   FinanceSettings,
@@ -20,6 +21,7 @@ import {
   UnexpectedInput,
   useFinance,
 } from '../utils/finance';
+import { requestNotificationPermissions } from '../utils/notifications';
 import { useTheme } from '../utils/theme';
 
 type Section = 'overview' | 'bills' | 'unexpected';
@@ -38,6 +40,11 @@ export default function MoneyScreen() {
   const [draft, setDraft] = useState<{ name: string; amount: string } | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  // Keep reminders in step with bills and ticks (reloaded after every change).
+  useEffect(() => {
+    if (loaded) syncBillReminders({ payments, transactions });
+  }, [loaded, payments, transactions]);
+
   const today = todayYMD();
   const period = periodFor(today, settings.periodStartDay);
 
@@ -55,7 +62,14 @@ export default function MoneyScreen() {
   async function submitBill(input: RecurringInput) {
     // Keep the form open if the save failed (the hook has already alerted).
     const ok = editingBill ? await finance.updatePayment(editingBill.id, input) : await finance.addPayment(input);
-    if (ok) setBillOpen(false);
+    if (!ok) return;
+    setBillOpen(false);
+    if (input.remind_days_before != null && Platform.OS !== 'web' && !(await requestNotificationPermissions())) {
+      Alert.alert(
+        'Notifications are off',
+        'The bill is saved, but reminders can’t be sent until you allow notifications for this app in your phone’s settings.'
+      );
+    }
   }
 
   async function deleteBill() {

@@ -16,3 +16,15 @@ export function fromYMD(ymd: string): Date {
 export function todayYMD() {
   return toYMD(new Date());
 }
+
+/** Returns 42 dates (6 weeks) starting from the Sunday of the week that contains the 1st of the month. */
+export function buildMonthGrid(year: number, month: number): Date[] {
+  const firstOfMonth = new Date(year, month, 1);
+  const startDow = firstOfMonth.getDay(); // 0 = Sun
+  const gridStart = new Date(year, month, 1 - startDow);
+  return Array.from({ length: 42 }, (_, i) => {
+    const d = new Date(gridStart);
+    d.setDate(gridStart.getDate() + i);
+    return d;
+  });
+}

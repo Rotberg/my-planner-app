@@ -17,6 +17,7 @@ import {
 import { fromYMD, todayYMD, toYMD } from '../../utils/dates';
 import {
   CATEGORIES,
+  DEFAULT_REMINDER_DAYS,
   Frequency,
   FREQUENCY_OPTIONS,
   INCOME_CATEGORIES,
@@ -24,8 +25,9 @@ import {
   nthOccurrence,
   RecurringInput,
   RecurringPayment,
+  REMINDER_OPTIONS,
 } from '../../utils/finance';
-import { minorToInput, parseMoney } from '../../utils/money';
+import { formatMoney, minorToInput, parseMoney } from '../../utils/money';
 import { useTheme } from '../../utils/theme';
 
 type Props = {
@@ -66,6 +68,7 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
   const [count, setCount] = useState('');
   const [category, setCategory] = useState(CATEGORIES[0].name);
   const [paused, setPaused] = useState(false);
+  const [remindDays, setRemindDays] = useState<number | null>(DEFAULT_REMINDER_DAYS);
   const [notes, setNotes] = useState('');
   const [picker, setPicker] = useState<null | 'date' | 'end'>(null);
   const scrollRef = useRef<ScrollView>(null);
@@ -87,6 +90,8 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
     setCount('');
     setCategory(bill?.category ?? (defaultDirection === 'in' ? INCOME_CATEGORIES : CATEGORIES)[0].name);
     setPaused(bill?.paused ?? false);
+    // Bills saved before reminders existed have no setting: treat as off.
+    setRemindDays(bill ? bill.remind_days_before ?? null : DEFAULT_REMINDER_DAYS);
     setNotes(bill?.notes ?? '');
     setPicker(null);
   }, [visible, bill, defaultDirection]);
@@ -138,6 +143,7 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
       end_date: end,
       category,
       paused,
+      remind_days_before: direction === 'out' ? remindDays : null,
       notes: notes.trim() || undefined,
     });
   }
@@ -330,6 +336,49 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
                   />
                 ))}
               </View>
+
+              {/* Reminder (bills only) */}
+              {!isIncome && (
+                <>
+                  <Text className={labelClass}>Remind me</Text>
+                  <View className="flex-row flex-wrap mb-3" style={{ gap: 6 }}>
+                    {REMINDER_OPTIONS.map((opt) => (
+                      <Chip
+                        key={opt.label}
+                        label={opt.label}
+                        selected={remindDays === opt.value}
+                        onPress={() => setRemindDays(opt.value)}
+                      />
+                    ))}
+                  </View>
+                </>
+              )}
+
+              {/* Price history (editing only) */}
+              {bill?.price_history && bill.price_history.length > 0 && (
+                <>
+                  <Text className={labelClass}>Price changes</Text>
+                  <View className="rounded-lg px-3 py-2 mb-3" style={{ borderWidth: 1, borderColor: theme.border }}>
+                    {[...bill.price_history].reverse().map((c, i) => {
+                      const up = c.to_minor > c.from_minor;
+                      return (
+                        <View key={`${c.date}-${i}`} className="flex-row justify-between py-1">
+                          <Text className="text-xs text-stone-500 dark:text-stone-400">
+                            {fromYMD(c.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </Text>
+                          <Text className="text-xs text-stone-700 dark:text-stone-200">
+                            {formatMoney(c.from_minor)} → {formatMoney(c.to_minor)}{' '}
+                            <Text style={{ color: up ? '#e11d48' : '#16a34a' }}>
+                              ({up ? '+' : '−'}
+                              {formatMoney(Math.abs(c.to_minor - c.from_minor))})
+                            </Text>
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
 
               {/* Pause (editing only) */}
               {bill && (
