@@ -12,7 +12,7 @@ Status: draft, 2026-10-10. Based on code at commit `f7002dd`.
 | Planner filter chips | Chips sit in a horizontal `ScrollView` with no `flexGrow: 0`. RN gives ScrollView `flexGrow: 1`, so it expands vertically and stretches each chip. | Chips are very tall, and they eat the space below the calendar. |
 | Tasks on calendar | Tasks *are* read on focus and rendered in the day list. But (a) the stretched filter row squeezes the day list to a sliver, so items below the events are effectively hidden, (b) recurring tasks only exist as their *next* instance, so future repeats never appear, (c) all items share one teal dot. | Looks like tasks are missing. |
 | Tasks screen | Commit `f7002dd` already collapses the form behind "+ Add Task" and defaults to today. Tasks are loaded only on mount (`useEffect`), not on focus. | If the phone is still on an older build/update, the old always-open form is what the user sees. Needs a fresh EAS build/update to verify. |
-| Shopping suggestions | Suggestions only come from Supabase `catalog_items` + `favorite_items`. Items you type are never recorded anywhere suggestions read from. Supabase errors are swallowed (`const { data } = ...`), so a failed fetch or RLS-blocked select gives an empty list silently. | Previous entries never appear as suggestions. Possibly nothing appears at all if the fetch fails. |
+| Shopping suggestions | Suggestions only come from the remote `catalog_items` + `favorite_items`. Items you type are never recorded anywhere suggestions read from. Fetch errors are swallowed (`const { data } = ...`), so a failed fetch or RLS-blocked select gives an empty list silently. | Previous entries never appear as suggestions. Possibly nothing appears at all if the fetch fails. |
 | Dark mode | Calendar day numbers use hard-coded `#1f2933`. | Unreadable day numbers in dark mode (bonus fix). |
 
 ---
@@ -150,7 +150,7 @@ Decided: only tasks dated today count. Undone Must Do tasks from earlier days do
 
 ### 4.1 Cause
 
-Typed item names never feed the suggestion source. Suggestions only read the curated catalog and favourites from Supabase, and fetch failures are silent.
+Typed item names never feed the suggestion source. Suggestions only read the curated catalog and favourites from the remote database, and fetch failures are silent.
 
 ### 4.2 Fix
 
@@ -159,11 +159,11 @@ Typed item names never feed the suggestion source. Suggestions only read the cur
 - Merge sources: favourites, then history ranked by count and recency, then catalog. De-dupe case-insensitively.
 - Match on prefix first, then substring. Show suggestions after 1 character, max 6.
 - Remember the category last used for each name, and pre-select it when a suggestion is tapped.
-- Log or surface Supabase errors in the fetch functions instead of discarding them, so an RLS or env problem is visible.
+- Log or surface fetch errors instead of discarding them, so a server or config problem is visible.
 
-### 4.3 Supabase removed (2026-10-10)
+### 4.3 Remote database removed (2026-10-10)
 
-The Supabase project stopped resolving, which broke every remote feature. All data now lives on the device in `utils/localDb.ts`, so suggestions no longer depend on a server.
+The remote database stopped resolving, which broke every remote feature. All data now lives on the device in `utils/localDb.ts`, so suggestions no longer depend on a server.
 
 ---
 
@@ -198,7 +198,7 @@ Estimate: roughly 1–2 days including the build and permissions flow.
 ## 6. Suggested build order
 
 1. Planner chip height fix + dark-mode calendar colours. Small and independent.
-2. Shopping suggestions from history + surfaced Supabase errors.
+2. Shopping suggestions from history + surfaced fetch errors.
 3. `utils/tasks.ts`, migration, shared `TaskForm`.
 4. Planner and Tasks screens moved onto the shared model. Calendar dots and checkboxes.
 5. Tasks layout rework + Must Do progress bar.

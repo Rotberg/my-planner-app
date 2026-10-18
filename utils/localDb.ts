@@ -1,8 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 /**
- * On-device replacement for the old Supabase tables. Each table is a JSON
- * array in AsyncStorage under `db:<table>`.
+ * On-device database. Each table is a JSON array in AsyncStorage under
+ * `db:<table>`.
  *
  * - Writes are serialised per table, so quick successive changes can't
  *   overwrite each other. Reads only wait for pending writes, not other reads.
