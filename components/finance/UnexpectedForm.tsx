@@ -13,7 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { fromYMD, todayYMD, toYMD } from '../../utils/dates';
+import { formatDay, fromYMD, todayYMD, toYMD } from '../../utils/dates';
 import { Pot, Transaction, UNEXPECTED_CATEGORIES, UnexpectedInput } from '../../utils/finance';
 import { minorToInput, parseMoney } from '../../utils/money';
 import { useTheme } from '../../utils/theme';
@@ -145,12 +145,7 @@ export default function UnexpectedForm({ visible, entry, draft, pots, onSubmit, 
               <Text className={labelClass}>Date</Text>
               <TouchableOpacity className={`${fieldClass} mb-3`} onPress={() => setShowPicker(true)}>
                 <Text className="text-sm text-stone-600 dark:text-stone-300">
-                  {fromYMD(date).toLocaleDateString(undefined, {
-                    weekday: 'short',
-                    day: 'numeric',
-                    month: 'short',
-                    year: 'numeric',
-                  })}
+                  {formatDay(date, true)}
                 </Text>
               </TouchableOpacity>
               {showPicker && (

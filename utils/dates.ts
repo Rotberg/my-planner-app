@@ -28,3 +28,16 @@ export function buildMonthGrid(year: number, month: number): Date[] {
     return d;
   });
 }
+
+/** Weekday headers for `buildMonthGrid` (which starts on Sunday). */
+export const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** "Thu, 23 Oct", or "Thu, 23 Oct 2026" with `withYear`. */
+export function formatDay(ymd: string, withYear = false): string {
+  return fromYMD(ymd).toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    ...(withYear ? { year: 'numeric' } : {}),
+  });
+}

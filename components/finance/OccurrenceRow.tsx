@@ -1,12 +1,8 @@
 import React from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
-import { fromYMD } from '../../utils/dates';
+import { formatDay } from '../../utils/dates';
 import { categoryColor, isSettled, Occurrence, occurrenceAmount, RecurringPayment } from '../../utils/finance';
 import { formatMoney } from '../../utils/money';
-
-export function shortDate(ymd: string) {
-  return fromYMD(ymd).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
-}
 
 /** One bill occurrence with a tick to mark it paid. Shared by the Overview, Bills list and calendar. */
 export function OccurrenceRow({
@@ -22,13 +18,22 @@ export function OccurrenceRow({
 }) {
   const settled = isSettled(o);
   const overdue = !settled && o.due < today;
-  const meta = [overdue ? 'Overdue' : null, shortDate(o.due), o.payment.category, o.assumed ? 'Before you added it' : null]
-    .filter(Boolean)
-    .join(' · ');
+  const note = o.deleted
+    ? 'Bill deleted'
+    : o.detached
+    ? o.payment.paused
+      ? 'Bill paused'
+      : 'Old schedule'
+    : o.assumed
+    ? 'Already paid'
+    : null;
+  const meta = [overdue ? 'Overdue' : null, formatDay(o.due), o.payment.category, note].filter(Boolean).join(' · ');
   return (
     <TouchableOpacity
       activeOpacity={0.7}
-      onPress={() => onEdit(o.payment)}
+      // A deleted bill has nothing left to edit.
+      onPress={o.deleted ? undefined : () => onEdit(o.payment)}
+      disabled={o.deleted}
       className="flex-row items-center bg-white dark:bg-stone-800 rounded-[10px] mb-2 overflow-hidden"
       style={{ borderLeftWidth: 4, borderLeftColor: overdue ? '#e11d48' : categoryColor(o.payment.category) }}
     >

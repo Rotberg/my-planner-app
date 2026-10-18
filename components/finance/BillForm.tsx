@@ -14,20 +14,25 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { fromYMD, todayYMD, toYMD } from '../../utils/dates';
+import { formatDay, fromYMD, todayYMD, toYMD } from '../../utils/dates';
 import {
   CATEGORIES,
   DEFAULT_REMINDER_DAYS,
   Frequency,
   FREQUENCY_OPTIONS,
   INCOME_CATEGORIES,
+  isSettled,
   nextDueOnOrAfter,
-  nthOccurrence,
+  endAfterPayments,
+  occurrencesInRange,
+  overdueStart,
   RecurringInput,
   RecurringPayment,
   REMINDER_OPTIONS,
+  Transaction,
 } from '../../utils/finance';
 import { formatMoney, minorToInput, parseMoney } from '../../utils/money';
+import { addDays } from '../../utils/recurrence';
 import { useTheme } from '../../utils/theme';
 import Chip from './Chip';
 
@@ -37,6 +42,8 @@ type Props = {
   bill: RecurringPayment | null;
   /** Whether a new payment starts as a bill or as income. */
   defaultDirection?: 'out' | 'in';
+  /** Used to warn before a schedule change hides unpaid overdue payments. */
+  transactions: Transaction[];
   onSubmit: (input: RecurringInput) => void;
   onDelete?: () => void;
   onClose: () => void;
@@ -44,17 +51,8 @@ type Props = {
 
 type EndMode = 'never' | 'date' | 'count';
 
-function formatDate(ymd: string) {
-  return fromYMD(ymd).toLocaleDateString(undefined, {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  });
-}
-
 /** Add/edit sheet for a repeating payment. */
-export default function BillForm({ visible, bill, defaultDirection = 'out', onSubmit, onDelete, onClose }: Props) {
+export default function BillForm({ visible, bill, defaultDirection = 'out', transactions, onSubmit, onDelete, onClose }: Props) {
   const theme = useTheme();
 
   const [direction, setDirection] = useState<'out' | 'in'>('out');
@@ -70,6 +68,7 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
   const [category, setCategory] = useState(CATEGORIES[0].name);
   const [paused, setPaused] = useState(false);
   const [remindDays, setRemindDays] = useState<number | null>(DEFAULT_REMINDER_DAYS);
+  const [alreadyPaid, setAlreadyPaid] = useState(true);
   const [notes, setNotes] = useState('');
   const [picker, setPicker] = useState<null | 'date' | 'end'>(null);
   const scrollRef = useRef<ScrollView>(null);
@@ -93,6 +92,7 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
     setPaused(bill?.paused ?? false);
     // Bills saved before reminders existed have no setting: treat as off.
     setRemindDays(bill ? bill.remind_days_before ?? null : DEFAULT_REMINDER_DAYS);
+    setAlreadyPaid(true);
     setNotes(bill?.notes ?? '');
     setPicker(null);
   }, [visible, bill, defaultDirection]);
@@ -118,7 +118,8 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
     }
     // Keep the original start unless the schedule changed, so past
     // occurrences (and their paid ticks) still line up.
-    const anchor = bill && date === initialDate && frequency === bill.frequency ? bill.anchor_date : date;
+    const rescheduled = !bill || date !== initialDate || frequency !== bill.frequency;
+    const anchor = rescheduled ? date : bill!.anchor_date;
     let end: string | null = null;
     if (endMode === 'date') {
       if (endDate < date) {
@@ -132,10 +133,11 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
         Alert.alert('Invalid number of payments', 'Enter how many payments are left, e.g. 12.');
         return;
       }
-      // Counted from the date shown, which is the next payment.
-      end = nthOccurrence({ anchor_date: date, frequency }, n - 1);
+      // Count along the real schedule from the date shown (the next payment),
+      // so month-end bills (e.g. the 31st) aren't cut short by a shorter month.
+      end = endAfterPayments({ anchor_date: anchor, frequency }, date, n);
     }
-    onSubmit({
+    const input: RecurringInput = {
       name: name.trim(),
       amount_minor: amountMinor,
       direction,
@@ -146,7 +148,32 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
       paused,
       remind_days_before: direction === 'out' ? remindDays : null,
       notes: notes.trim() || undefined,
-    });
+    };
+    // Only set when the schedule (re)starts, so existing bills keep their setting.
+    if (rescheduled) input.paid_before = date < todayYMD() && alreadyPaid ? todayYMD() : null;
+
+    // Restarting the schedule drops the old one's unpaid overdue payments.
+    const today = todayYMD();
+    const lost =
+      bill && rescheduled
+        ? occurrencesInRange([bill], transactions, overdueStart(today), addDays(today, -1)).filter(
+            (o) => !isSettled(o) && !o.detached
+          )
+        : [];
+    if (lost.length > 0) {
+      Alert.alert(
+        'Unpaid payments will be removed',
+        `Changing the date or how often it repeats starts a new schedule. ${lost.length} unpaid overdue ${
+          lost.length === 1 ? 'payment' : 'payments'
+        } (${lost.map((o) => formatDay(o.due)).join(', ')}) will no longer show. Tick them off first if you've paid them.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Change anyway', style: 'destructive', onPress: () => onSubmit(input) },
+        ]
+      );
+      return;
+    }
+    onSubmit(input);
   }
 
   function confirmDelete() {
@@ -250,7 +277,7 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
               {/* Date */}
               <Text className={labelClass}>{bill ? 'Next payment' : 'First payment'}</Text>
               <TouchableOpacity className={`${fieldClass} mb-3`} onPress={() => setPicker('date')}>
-                <Text className="text-sm text-stone-600 dark:text-stone-300">{formatDate(date)}</Text>
+                <Text className="text-sm text-stone-600 dark:text-stone-300">{formatDay(date, true)}</Text>
               </TouchableOpacity>
               {picker === 'date' && (
                 <DateTimePicker
@@ -264,6 +291,31 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
                     setDate(toYMD(selected));
                   }}
                 />
+              )}
+
+              {/* Past start date: were the earlier payments made? */}
+              {date < todayYMD() && (!bill || date !== initialDate || frequency !== bill.frequency) && (
+                <View
+                  className="flex-row items-center justify-between rounded-lg px-3 py-2 mb-3"
+                  style={{ borderWidth: 1, borderColor: theme.border }}
+                >
+                  <View className="flex-1 pr-3">
+                    <Text className="text-sm font-semibold" style={{ color: theme.text }}>
+                      Payments before today are already paid
+                    </Text>
+                    <Text className="text-[11px]" style={{ color: theme.placeholder }}>
+                      {alreadyPaid
+                        ? 'Earlier payments count as paid, e.g. rent you’ve paid for years.'
+                        : 'Earlier payments show as overdue until you tick them off.'}
+                    </Text>
+                  </View>
+                  <Switch
+                    value={alreadyPaid}
+                    onValueChange={setAlreadyPaid}
+                    trackColor={{ true: '#14b8a6', false: theme.border }}
+                    thumbColor="#ffffff"
+                  />
+                </View>
               )}
 
               {/* Ends */}
@@ -282,7 +334,7 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
               {endMode === 'date' && (
                 <>
                   <TouchableOpacity className={`${fieldClass} mb-3`} onPress={() => setPicker('end')}>
-                    <Text className="text-sm text-stone-600 dark:text-stone-300">Last payment: {formatDate(endDate)}</Text>
+                    <Text className="text-sm text-stone-600 dark:text-stone-300">Last payment: {formatDay(endDate, true)}</Text>
                   </TouchableOpacity>
                   {picker === 'end' && (
                     <DateTimePicker
@@ -348,6 +400,8 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
                   <View className="rounded-lg px-3 py-2 mb-3" style={{ borderWidth: 1, borderColor: theme.border }}>
                     {[...bill.price_history].reverse().map((c, i) => {
                       const up = c.to_minor > c.from_minor;
+                      // A rise is bad news for a bill but good news for income.
+                      const bad = up === !isIncome;
                       return (
                         <View key={`${c.date}-${i}`} className="flex-row justify-between py-1">
                           <Text className="text-xs text-stone-500 dark:text-stone-400">
@@ -355,7 +409,7 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
                           </Text>
                           <Text className="text-xs text-stone-700 dark:text-stone-200">
                             {formatMoney(c.from_minor)} → {formatMoney(c.to_minor)}{' '}
-                            <Text style={{ color: up ? '#e11d48' : '#16a34a' }}>
+                            <Text style={{ color: bad ? '#e11d48' : '#16a34a' }}>
                               ({up ? '+' : '−'}
                               {formatMoney(Math.abs(c.to_minor - c.from_minor))})
                             </Text>

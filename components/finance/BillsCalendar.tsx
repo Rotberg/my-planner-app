@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Text, TouchableOpacity, useColorScheme, View } from 'react-native';
-import { buildMonthGrid, fromYMD, toYMD } from '../../utils/dates';
+import { buildMonthGrid, DAY_LABELS, fromYMD, toYMD } from '../../utils/dates';
 import {
   categoryColor,
   isSettled,
@@ -17,17 +17,18 @@ import { OccurrenceRow } from './OccurrenceRow';
 type Props = {
   /** Bills only (money out). */
   bills: RecurringPayment[];
+  /** Every stored payment, so ticks for deleted bills still show. */
+  allPayments: RecurringPayment[];
   transactions: Transaction[];
   today: string;
   onEdit: (bill: RecurringPayment) => void;
   onTogglePaid: (occ: Occurrence) => void;
 };
 
-const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MAX_DOTS = 3;
 
 /** Month grid with a dot per bill on its due date; tap a day to list them. */
-export default function BillsCalendar({ bills, transactions, today, onEdit, onTogglePaid }: Props) {
+export default function BillsCalendar({ bills, allPayments, transactions, today, onEdit, onTogglePaid }: Props) {
   const theme = useTheme();
   const isDark = useColorScheme() === 'dark';
   const now = fromYMD(today);
@@ -36,7 +37,7 @@ export default function BillsCalendar({ bills, transactions, today, onEdit, onTo
   const [selected, setSelected] = useState(today);
 
   const grid = buildMonthGrid(year, month);
-  const occ = occurrencesInRange(bills, transactions, toYMD(grid[0]), toYMD(grid[grid.length - 1]));
+  const occ = occurrencesInRange(bills, transactions, toYMD(grid[0]), toYMD(grid[grid.length - 1]), allPayments);
   const byDay = new Map<string, Occurrence[]>();
   for (const o of occ) byDay.set(o.due, [...(byDay.get(o.due) ?? []), o]);
 
