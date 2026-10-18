@@ -29,6 +29,7 @@ import {
 } from '../../utils/finance';
 import { formatMoney, minorToInput, parseMoney } from '../../utils/money';
 import { useTheme } from '../../utils/theme';
+import Chip from './Chip';
 
 type Props = {
   visible: boolean;
@@ -169,20 +170,6 @@ export default function BillForm({ visible, bill, defaultDirection = 'out', onSu
     'border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-[15px] text-stone-800 dark:text-stone-100';
   const fieldClass = 'border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5';
   const labelClass = 'text-xs font-semibold text-stone-500 dark:text-stone-400 mb-1.5';
-
-  function Chip({ label, selected, onPress, color = '#0d9488' }: { label: string; selected: boolean; onPress: () => void; color?: string }) {
-    return (
-      <Pressable
-        className="rounded-lg border-[1.5px] px-3 py-2 items-center"
-        style={selected ? { backgroundColor: color, borderColor: color } : { borderColor: theme.border }}
-        onPress={onPress}
-      >
-        <Text className={`text-[12px] font-semibold ${selected ? 'text-white' : 'text-stone-500 dark:text-stone-400'}`}>
-          {label}
-        </Text>
-      </Pressable>
-    );
-  }
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>

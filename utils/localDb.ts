@@ -26,7 +26,9 @@ export type TableName =
   | 'workout_sessions'
   | 'workout_session_exercises'
   | 'finance_recurring'
-  | 'finance_transactions';
+  | 'finance_transactions'
+  | 'finance_pots'
+  | 'finance_pot_entries';
 
 export type Row = { id: string; created_at: string; [key: string]: any };
 
@@ -47,6 +49,7 @@ const CASCADES: Partial<Record<TableName, { table: TableName; foreignKey: string
   shopping_lists: { table: 'shopping_list_items', foreignKey: 'list_id' },
   workout_routines: { table: 'workout_routine_exercises', foreignKey: 'routine_id' },
   workout_sessions: { table: 'workout_session_exercises', foreignKey: 'session_id' },
+  finance_pots: { table: 'finance_pot_entries', foreignKey: 'pot_id' },
 };
 
 const storageKey = (table: TableName) => `db:${table}`;
@@ -276,6 +279,23 @@ export function insertRowUnless<T extends Row = Row>(
     if ((current as T[]).some(exists)) return { rows: current, result: null };
     const [created] = stamp<T>([row]);
     return { rows: [...current, created], result: created };
+  });
+}
+
+/**
+ * Inserts each of `rows` unless `exists(stored, row)` matches a stored row,
+ * all in one write. Resolves to the rows actually added.
+ */
+export function insertRowsUnless<T extends Row = Row>(
+  table: TableName,
+  rows: NewRow<T>[],
+  exists: (stored: T, row: NewRow<T>) => boolean
+): Promise<T[]> {
+  return mutate(table, (current) => {
+    const fresh = rows.filter((r) => !(current as T[]).some((stored) => exists(stored, r)));
+    if (fresh.length === 0) return { rows: current, result: [] };
+    const created = stamp<T>(fresh);
+    return { rows: [...current, ...created], result: created };
   });
 }
 

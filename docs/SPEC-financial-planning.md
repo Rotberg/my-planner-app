@@ -134,7 +134,7 @@ Keyboard handling: reuse whatever fix lands from `fix/keyboard-covers-note-task-
 
 Lives as a section on Overview (tap to manage), not its own segment, to keep 3 segments.
 
-- **Buffer** (one, built in): amount set aside each period for unexpected costs. Stored in `finance:settings.bufferMinor` (phase 2). Roll-over of unspent buffer is deferred to phase 4, alongside the pots table.
+- **Buffer** (one, built in): amount set aside each period for unexpected costs. Stored in `finance:settings.bufferMinor` (phase 2). Roll-over of unspent buffer is **not built** (still open after phase 4): the buffer resets each period.
 - **Sinking-fund pots:** name, target amount, target date. The app calculates **£/month needed** = (target − saved) ÷ months left (YNAB targets). Contributions are recorded automatically each period (planned money, not real transfers), and can be adjusted.
 - Examples to show in the empty state: "Car insurance £540 by March", "Christmas £400 by December", "MOT & service £250 by June".
 
@@ -151,7 +151,8 @@ Add to `TableName` in `utils/localDb.ts`:
 ```ts
 | 'finance_recurring'      // bills, subscriptions, income
 | 'finance_transactions'   // paid occurrences + unexpected + pot spends
-| 'finance_pots'           // sinking funds + the buffer
+| 'finance_pots'           // savings pots (sinking funds); the buffer stays in settings
+| 'finance_pot_entries'    // money put into pots: monthly contributions + manual adjustments
 ```
 
 ```ts
@@ -186,13 +187,22 @@ type Transaction = Row & {
 
 type Pot = Row & {
   name: string;
-  kind: 'buffer' | 'sinking';
-  monthly_amount_minor: number; // buffer: fixed; sinking: computed and stored when edited
-  target_minor?: number | null;
-  target_date?: string | null;
-  balance_minor: number;        // contributions − spends, updated with transactions
-  rollover: boolean;
+  target_minor: number | null;  // null = open-ended
+  target_date: string | null;
+  auto: boolean;                // work out each period's amount from target + date
+  monthly_minor: number;        // fixed amount when !auto
 };
+
+type PotEntry = Row & {
+  pot_id: string;
+  kind: 'contribution' | 'adjustment';
+  amount_minor: number;
+  period_start: string;         // one contribution per pot per period
+};
+// balance = Σ entries − Σ unexpected transactions with that pot_id.
+// Contributions are added on Money load for every period from the pot's first
+// up to now (max 24 at once). Periods starting on/before the latest contribution
+// are skipped, so changing the budget start day can't double-count.
 
 type PriceChange = { from_minor: number; to_minor: number; date: string };  // stored on the bill, so one write
 ```

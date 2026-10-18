@@ -7,6 +7,9 @@ import {
   occurrencesInRange,
   periodFor,
   periodLabel,
+  Pot,
+  PotEntry,
+  potsTotalFor,
   RecurringPayment,
   shiftPeriod,
   summarisePeriod,
@@ -15,17 +18,22 @@ import {
 import { formatMoney } from '../../utils/money';
 import { addDays, daysBetween } from '../../utils/recurrence';
 import { OccurrenceRow } from './OccurrenceRow';
+import PotsSection from './PotsSection';
 
 type Props = {
   payments: RecurringPayment[];
   transactions: Transaction[];
   settings: FinanceSettings;
+  pots: Pot[];
+  potEntries: PotEntry[];
   today: string;
   onEdit: (bill: RecurringPayment) => void;
   onTogglePaid: (occ: Occurrence) => void;
   onAddIncome: () => void;
   onDismissIncomeHint: () => void;
   onOpenSettings: () => void;
+  onOpenPot: (pot: Pot) => void;
+  onAddPot: () => void;
 };
 
 /** Buffer colour: teal while healthy, amber under 25% left, red once overspent. */
@@ -39,18 +47,23 @@ export default function OverviewView({
   payments,
   transactions,
   settings,
+  pots,
+  potEntries,
   today,
   onEdit,
   onTogglePaid,
   onAddIncome,
   onDismissIncomeHint,
   onOpenSettings,
+  onOpenPot,
+  onAddPot,
 }: Props) {
   const [offset, setOffset] = useState(0);
   const startDay = settings.periodStartDay;
   const period = shiftPeriod(periodFor(today, startDay), offset, startDay);
   const isCurrent = offset === 0;
-  const s = summarisePeriod(payments, transactions, period, settings.bufferMinor);
+  const potsMinor = potsTotalFor(pots, potEntries, transactions, period, today, startDay);
+  const s = summarisePeriod(payments, transactions, period, settings.bufferMinor, potsMinor);
 
   const daysLeft = isCurrent ? daysBetween(today, period.end) + 1 : 0;
   const perDay = s.hasIncome && isCurrent && s.leftToSpend > 0 ? s.leftToSpend / daysLeft : null;
@@ -134,9 +147,17 @@ export default function OverviewView({
             s.buffer > 0
               ? s.unexpected > s.buffer
                 ? `Unexpected costs went ${formatMoney(s.unexpected - s.buffer)} over your buffer`
-                : `${s.unexpectedCount} unexpected ${s.unexpectedCount === 1 ? 'cost' : 'costs'} so far`
+                : `${s.unexpectedCount} ${s.unexpectedCount === 1 ? 'cost' : 'costs'} from your buffer so far`
+              : s.fromPots > 0
+              ? `${s.unexpectedCount} this period, not counting those paid from pots`
               : `${s.unexpectedCount} this period`
           )}
+          {(s.pots > 0 || pots.length > 0) &&
+            row(
+              'Saved into pots',
+              `${s.hasIncome ? '−' : ''}${formatMoney(s.pots)}`,
+              s.fromPots > 0 ? `${formatMoney(s.fromPots)} of unexpected costs paid from pots` : undefined
+            )}
         </View>
       </View>
 
@@ -188,6 +209,18 @@ export default function OverviewView({
           <Text className="text-xs font-bold text-teal-600 mt-0.5">Set up a buffer</Text>
         </TouchableOpacity>
       )}
+
+      {/* ── Pots ── */}
+      <PotsSection
+        pots={pots}
+        entries={potEntries}
+        transactions={transactions}
+        period={period}
+        periodStartDay={startDay}
+        today={today}
+        onOpen={onOpenPot}
+        onAdd={onAddPot}
+      />
 
       {/* ── Coming up ── */}
       {comingUp.length > 0 && (

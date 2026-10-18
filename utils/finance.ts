@@ -3,7 +3,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useState } from 'react';
 import { Alert } from 'react-native';
 import { fromYMD, toYMD } from './dates';
-import { deleteRows, insertRows, insertRowUnless, Row, selectRows, updateRows } from './localDb';
+import { deleteRows, insertRows, insertRowsUnless, insertRowUnless, Row, selectRows, updateRows } from './localDb';
 import { addDays, addMonthsClamped, daysBetween, monthsBetween } from './recurrence';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -100,10 +100,39 @@ export type Transaction = Row & {
   recurring_id: string | null;
   /** Which occurrence this pays. `recurring_id` + `due_date` is unique. */
   due_date: string | null;
+  /** Unexpected cost paid from a savings pot instead of the buffer. */
+  pot_id?: string | null;
   notes?: string;
 };
 
-export type UnexpectedInput = Pick<Transaction, 'date' | 'amount_minor' | 'name' | 'category' | 'notes'>;
+export type UnexpectedInput = Pick<Transaction, 'date' | 'amount_minor' | 'name' | 'category' | 'notes' | 'pot_id'>;
+
+/**
+ * A savings pot for a cost you know is coming (car insurance, Christmas).
+ * Money is "put in" each period on paper, not moved between accounts.
+ */
+export type Pot = Row & {
+  name: string;
+  /** What you're saving towards, or null for an open-ended pot. */
+  target_minor: number | null;
+  /** When you need it by, or null. */
+  target_date: string | null;
+  /** Work out each period's amount from the target and date (needs both). */
+  auto: boolean;
+  /** Fixed amount per period when not `auto`. */
+  monthly_minor: number;
+};
+
+export type PotInput = Omit<Pot, 'id' | 'created_at'>;
+
+/** Money put into (or taken out of) a pot. Spends come from transactions with `pot_id`. */
+export type PotEntry = Row & {
+  pot_id: string;
+  kind: 'contribution' | 'adjustment';
+  amount_minor: number;
+  /** Start of the budget period this belongs to. */
+  period_start: string;
+};
 
 // ─── Occurrences ─────────────────────────────────────────────────────────────
 
@@ -312,20 +341,27 @@ export type PeriodSummary = {
   /** bills + setAside: everything spoken for, for users who don't track income. */
   committed: number;
   hasIncome: boolean;
+  /** Put into savings pots this period. */
+  pots: number;
+  /** Unexpected costs paid from pots (already saved, so not counted again). */
+  fromPots: number;
 };
 
 export function summarisePeriod(
   payments: RecurringPayment[],
   transactions: Transaction[],
   period: Period,
-  bufferMinor: number
+  bufferMinor: number,
+  potsMinor = 0
 ): PeriodSummary {
   const occ = occurrencesInRange(payments, transactions, period.start, period.end);
   const sum = (list: Occurrence[]) => list.reduce((s, o) => s + occurrenceAmount(o), 0);
   const outs = occ.filter((o) => o.payment.direction === 'out');
-  const unexpected = transactions.filter(
+  const allUnexpected = transactions.filter(
     (t) => t.kind === 'unexpected' && t.date >= period.start && t.date <= period.end
   );
+  const unexpected = allUnexpected.filter((t) => !t.pot_id);
+  const fromPots = allUnexpected.filter((t) => t.pot_id).reduce((s, t) => s + t.amount_minor, 0);
   const income = sum(occ.filter((o) => o.payment.direction === 'in'));
   const bills = sum(outs);
   const unexpectedTotal = unexpected.reduce((s, t) => s + t.amount_minor, 0);
@@ -339,10 +375,130 @@ export function summarisePeriod(
     unexpectedCount: unexpected.length,
     buffer: bufferMinor,
     setAside,
-    leftToSpend: income - bills - setAside,
-    committed: bills + setAside,
+    leftToSpend: income - bills - setAside - potsMinor,
+    committed: bills + setAside + potsMinor,
     hasIncome: payments.some((p) => p.direction === 'in'),
+    pots: potsMinor,
+    fromPots,
   };
+}
+
+// ─── Pots ────────────────────────────────────────────────────────────────────
+
+/** Saved so far: contributions and adjustments, minus unexpected costs paid from it. */
+export function potBalance(pot: Pot, entries: PotEntry[], transactions: Transaction[]) {
+  const put = entries.filter((e) => e.pot_id === pot.id).reduce((s, e) => s + e.amount_minor, 0);
+  const spent = transactions.filter((t) => t.pot_id === pot.id).reduce((s, t) => s + t.amount_minor, 0);
+  return put - spent;
+}
+
+/** Periods from `period` up to and including the one containing `date` (at least 1). */
+export function periodsUntil(period: Period, date: string, startDay: number) {
+  let n = 1;
+  for (let p = period; p.end < date && n < 600; p = shiftPeriod(p, 1, startDay)) n++;
+  return n;
+}
+
+/**
+ * What to put in for `period`, given the pot's balance at that point. Never
+ * negative, and never more than is left to reach a target.
+ */
+export function potAmountFor(pot: Pot, balance: number, period: Period, startDay: number): number {
+  const remaining = pot.target_minor == null ? null : pot.target_minor - balance;
+  if (remaining != null && remaining <= 0) return 0;
+  if (!pot.auto || pot.target_minor == null || pot.target_date == null) {
+    const fixed = Math.max(0, pot.monthly_minor);
+    return remaining == null ? fixed : Math.min(fixed, remaining);
+  }
+  return Math.ceil(remaining! / periodsUntil(period, pot.target_date, startDay));
+}
+
+/** Longest gap filled in one go, so an app left closed for years can't add hundreds of rows. */
+const MAX_CATCH_UP_PERIODS = 24;
+
+/**
+ * Contributions that should exist but don't yet: one per pot for each period
+ * from the pot's first (the one it was created in) up to the current one.
+ *
+ * A period gets an entry even when nothing goes in (e.g. the target is
+ * reached), so it's marked as done and never back-filled later. A recorded
+ * contribution covers the month from its `period_start`, and any period that
+ * starts inside that month is skipped, so changing the budget month's start
+ * day can't put money in twice (at worst one period gets nothing, which
+ * "work it out" pots make up the next period).
+ */
+export function pendingContributions(
+  pots: Pot[],
+  entries: PotEntry[],
+  transactions: Transaction[],
+  today: string,
+  startDay: number
+): Omit<PotEntry, 'id' | 'created_at'>[] {
+  const current = periodFor(today, startDay);
+  const result: Omit<PotEntry, 'id' | 'created_at'>[] = [];
+  for (const pot of pots) {
+    const contributions = entries.filter((e) => e.pot_id === pot.id && e.kind === 'contribution');
+    const last = contributions.reduce<string | null>((m, e) => (m == null || e.period_start > m ? e.period_start : m), null);
+    const coveredUntil = last ? addMonthsClamped(last, 1) : null; // exclusive
+    let p = periodFor(last ?? toYMD(new Date(pot.created_at)), startDay);
+    if (shiftPeriod(current, -MAX_CATCH_UP_PERIODS, startDay).start > p.start) {
+      p = shiftPeriod(current, -MAX_CATCH_UP_PERIODS + 1, startDay);
+    }
+    let balance = potBalance(pot, entries, transactions);
+    for (; p.start <= current.start; p = shiftPeriod(p, 1, startDay)) {
+      if (coveredUntil && p.start < coveredUntil) continue;
+      const amount = potAmountFor(pot, balance, p, startDay);
+      result.push({ pot_id: pot.id, kind: 'contribution', amount_minor: amount, period_start: p.start });
+      balance += amount;
+    }
+  }
+  return result;
+}
+
+/**
+ * What goes into `pot` in `period`. Past and current periods use what was
+ * recorded. Future periods are projected one period at a time from now, so
+ * each one accounts for the money planned before it.
+ */
+export function potAmountInPeriod(
+  pot: Pot,
+  entries: PotEntry[],
+  transactions: Transaction[],
+  period: Period,
+  today: string,
+  startDay: number
+): number {
+  const current = periodFor(today, startDay);
+  if (period.start <= current.start) {
+    return entries
+      .filter(
+        (e) =>
+          e.pot_id === pot.id &&
+          e.kind === 'contribution' &&
+          e.period_start >= period.start &&
+          e.period_start <= period.end
+      )
+      .reduce((s, e) => s + e.amount_minor, 0);
+  }
+  let balance = potBalance(pot, entries, transactions);
+  let amount = 0;
+  for (let p = shiftPeriod(current, 1, startDay); p.start <= period.start; p = shiftPeriod(p, 1, startDay)) {
+    amount = potAmountFor(pot, balance, p, startDay);
+    balance += amount;
+  }
+  return amount;
+}
+
+/** Total put into all pots in `period` (recorded for past/current, projected for future). */
+export function potsTotalFor(
+  pots: Pot[],
+  entries: PotEntry[],
+  transactions: Transaction[],
+  period: Period,
+  today: string,
+  startDay: number
+) {
+  return pots.reduce((s, pot) => s + potAmountInPeriod(pot, entries, transactions, period, today, startDay), 0);
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -353,13 +509,20 @@ export type FinanceSettings = {
   /** Money set aside each period for unexpected costs, in pence. 0 = no buffer. */
   bufferMinor: number;
   hideIncomeHint: boolean;
+  /** Show bill due dates on the Planner calendar. */
+  showBillsOnPlanner: boolean;
 };
 
-export const DEFAULT_SETTINGS: FinanceSettings = { periodStartDay: 1, bufferMinor: 0, hideIncomeHint: false };
+export const DEFAULT_SETTINGS: FinanceSettings = {
+  periodStartDay: 1,
+  bufferMinor: 0,
+  hideIncomeHint: false,
+  showBillsOnPlanner: false,
+};
 
 const SETTINGS_KEY = 'finance:settings';
 
-async function loadSettings(): Promise<FinanceSettings> {
+export async function loadFinanceSettings(): Promise<FinanceSettings> {
   try {
     const raw = await AsyncStorage.getItem(SETTINGS_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
@@ -368,6 +531,7 @@ async function loadSettings(): Promise<FinanceSettings> {
     if (!Number.isInteger(s.periodStartDay) || s.periodStartDay < 1 || s.periodStartDay > 28) s.periodStartDay = 1;
     if (!Number.isSafeInteger(s.bufferMinor) || s.bufferMinor < 0) s.bufferMinor = 0;
     s.hideIncomeHint = s.hideIncomeHint === true;
+    s.showBillsOnPlanner = s.showBillsOnPlanner === true;
     return s;
   } catch (e) {
     console.warn('Could not read money settings, using defaults:', e);
@@ -386,18 +550,40 @@ export function useFinance() {
   const [payments, setPayments] = useState<RecurringPayment[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [settings, setSettings] = useState<FinanceSettings>(DEFAULT_SETTINGS);
+  const [pots, setPots] = useState<Pot[]>([]);
+  const [potEntries, setPotEntries] = useState<PotEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   const reload = useCallback(async () => {
     try {
-      const [p, t, s] = await Promise.all([
+      const [p, t, s, pots, storedEntries] = await Promise.all([
         selectRows<RecurringPayment>('finance_recurring', { orderBy: 'name' }),
         selectRows<Transaction>('finance_transactions', { orderBy: 'date', ascending: false }),
-        loadSettings(),
+        loadFinanceSettings(),
+        selectRows<Pot>('finance_pots', { orderBy: 'name' }),
+        selectRows<PotEntry>('finance_pot_entries'),
       ]);
+      let entries = storedEntries;
+      // Put this period's (and any missed periods') money into each pot, in one write.
+      const pending = pendingContributions(pots, entries, t, toYMD(new Date()), s.periodStartDay);
+      if (pending.length > 0) {
+        try {
+          const added = await insertRowsUnless<PotEntry>(
+            'finance_pot_entries',
+            pending,
+            // Another load may have added the same period in the meantime.
+            (stored, e) => stored.pot_id === e.pot_id && stored.kind === 'contribution' && stored.period_start === e.period_start
+          );
+          entries = [...entries, ...added];
+        } catch (err) {
+          console.warn('Could not add pot contributions:', err);
+        }
+      }
       setPayments(p);
       setTransactions(t);
       setSettings(s);
+      setPots(pots);
+      setPotEntries(entries);
     } catch (e) {
       console.error('Failed to load money data:', e);
     } finally {
@@ -513,17 +699,59 @@ export function useFinance() {
     (patch: Partial<FinanceSettings>) =>
       run(async () => {
         // Merge with what's stored, not what's on screen, so two quick saves can't undo each other.
-        const next = { ...(await loadSettings()), ...patch };
+        const next = { ...(await loadFinanceSettings()), ...patch };
         await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
       }),
     [run]
+  );
+
+  const addPot = useCallback((input: PotInput) => run(() => insertRows<Pot>('finance_pots', [input])), [run]);
+
+  const updatePot = useCallback(
+    (id: string, input: PotInput) => run(() => updateRows('finance_pots', (r) => r.id === id, () => input)),
+    [run]
+  );
+
+  /** Deletes the pot and its contributions. Costs paid from it stay, still marked as from a pot. */
+  const deletePot = useCallback((id: string) => run(() => deleteRows('finance_pots', (r) => r.id === id)), [run]);
+
+  /**
+   * Records a correction so the pot's balance becomes `target` (e.g. to match
+   * a real savings account). The current balance is read from storage, not
+   * the screen, so money added since the form opened is taken into account.
+   */
+  const setPotBalance = useCallback(
+    (pot: Pot, target: number) =>
+      run(async () => {
+        const [entries, transactions] = await Promise.all([
+          selectRows<PotEntry>('finance_pot_entries'),
+          selectRows<Transaction>('finance_transactions'),
+        ]);
+        const current = potBalance(pot, entries, transactions);
+        if (target === current) return;
+        await insertRows<PotEntry>('finance_pot_entries', [
+          {
+            pot_id: pot.id,
+            kind: 'adjustment',
+            amount_minor: target - current,
+            period_start: periodFor(toYMD(new Date()), settings.periodStartDay).start,
+          },
+        ]);
+      }),
+    [run, settings.periodStartDay]
   );
 
   return {
     payments,
     transactions,
     settings,
+    pots,
+    potEntries,
     loaded,
+    addPot,
+    updatePot,
+    deletePot,
+    setPotBalance,
     addPayment,
     updatePayment,
     deletePayment,

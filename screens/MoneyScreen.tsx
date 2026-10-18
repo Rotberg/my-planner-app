@@ -5,6 +5,7 @@ import BillForm from '../components/finance/BillForm';
 import BillsView from '../components/finance/BillsView';
 import MoneySettings from '../components/finance/MoneySettings';
 import OverviewView from '../components/finance/OverviewView';
+import PotForm from '../components/finance/PotForm';
 import UnexpectedForm from '../components/finance/UnexpectedForm';
 import UnexpectedView from '../components/finance/UnexpectedView';
 import { IconSymbol } from '../components/ui/icon-symbol';
@@ -15,6 +16,9 @@ import {
   Occurrence,
   periodFor,
   periodLabel,
+  Pot,
+  potBalance,
+  PotInput,
   RecurringInput,
   RecurringPayment,
   Transaction,
@@ -29,7 +33,7 @@ type Section = 'overview' | 'bills' | 'unexpected';
 export default function MoneyScreen() {
   const theme = useTheme();
   const finance = useFinance();
-  const { payments, transactions, settings, loaded } = finance;
+  const { payments, transactions, settings, pots, potEntries, loaded } = finance;
 
   const [view, setView] = useState<Section>('overview');
   const [billOpen, setBillOpen] = useState(false);
@@ -39,6 +43,8 @@ export default function MoneyScreen() {
   const [editingEntry, setEditingEntry] = useState<Transaction | null>(null);
   const [draft, setDraft] = useState<{ name: string; amount: string } | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [potOpen, setPotOpen] = useState(false);
+  const [editingPot, setEditingPot] = useState<Pot | null>(null);
 
   // Keep reminders in step with bills and ticks (reloaded after every change).
   useEffect(() => {
@@ -98,6 +104,30 @@ export default function MoneyScreen() {
     if (editingEntry && (await finance.deleteTransaction(editingEntry.id))) setUnexpectedOpen(false);
   }
 
+  function openPot(pot: Pot | null) {
+    setEditingPot(pot);
+    setPotOpen(true);
+  }
+
+  const editingPotBalance = editingPot ? potBalance(editingPot, potEntries, transactions) : 0;
+
+  async function submitPot(input: PotInput, newBalance: number | null) {
+    if (!editingPot) {
+      if (await finance.addPot(input)) setPotOpen(false);
+      return;
+    }
+    if (!(await finance.updatePot(editingPot.id, input))) return;
+    // Only correct the saved amount if the user changed it in the form.
+    if (newBalance != null && newBalance !== editingPotBalance && !(await finance.setPotBalance(editingPot, newBalance))) {
+      return;
+    }
+    setPotOpen(false);
+  }
+
+  async function deletePot() {
+    if (editingPot && (await finance.deletePot(editingPot.id))) setPotOpen(false);
+  }
+
   async function saveSettings(patch: Partial<FinanceSettings>) {
     if (await finance.saveSettings(patch)) setSettingsOpen(false);
   }
@@ -146,12 +176,16 @@ export default function MoneyScreen() {
             payments={payments}
             transactions={transactions}
             settings={settings}
+            pots={pots}
+            potEntries={potEntries}
             today={today}
             onEdit={openEditBill}
             onTogglePaid={togglePaid}
             onAddIncome={() => openAddBill('in')}
             onDismissIncomeHint={() => finance.saveSettings({ hideIncomeHint: true })}
             onOpenSettings={() => setSettingsOpen(true)}
+            onOpenPot={(pot) => openPot(pot)}
+            onAddPot={() => openPot(null)}
           />
         )}
         {loaded && view === 'bills' && (
@@ -171,6 +205,8 @@ export default function MoneyScreen() {
             period={period}
             periodName={periodLabel(period, settings.periodStartDay)}
             bufferMinor={settings.bufferMinor}
+            pots={pots}
+            periodStartDay={settings.periodStartDay}
             today={today}
             onQuickAdd={finance.addUnexpected}
             onMoreDetails={(d) => openUnexpected(null, d)}
@@ -191,9 +227,20 @@ export default function MoneyScreen() {
         visible={unexpectedOpen}
         entry={editingEntry}
         draft={draft}
+        pots={pots}
         onSubmit={submitUnexpected}
         onDelete={deleteUnexpected}
         onClose={() => setUnexpectedOpen(false)}
+      />
+      <PotForm
+        visible={potOpen}
+        pot={editingPot}
+        balance={editingPotBalance}
+        period={period}
+        periodStartDay={settings.periodStartDay}
+        onSubmit={submitPot}
+        onDelete={deletePot}
+        onClose={() => setPotOpen(false)}
       />
       <MoneySettings
         visible={settingsOpen}
