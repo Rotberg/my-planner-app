@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useState } from 'react';
 import { Alert } from 'react-native';
-import { fromYMD, toYMD } from './dates';
+import { fromYMD, todayYMD, toYMD } from './dates';
 import { deleteRows, insertRows, insertRowsUnless, insertRowUnless, Row, selectRows, updateRows } from './localDb';
 import { addDays, addMonthsClamped, daysBetween, monthsBetween } from './recurrence';
 
@@ -50,10 +50,12 @@ export const UNEXPECTED_CATEGORIES: Category[] = [
   { name: 'Other', color: '#78716c' },
 ];
 
+const CATEGORY_COLORS = new Map(
+  [...UNEXPECTED_CATEGORIES, ...INCOME_CATEGORIES, ...CATEGORIES].map((c) => [c.name, c.color])
+);
+
 export function categoryColor(name: string) {
-  return (
-    [...CATEGORIES, ...INCOME_CATEGORIES, ...UNEXPECTED_CATEGORIES].find((c) => c.name === name)?.color ?? '#78716c'
-  );
+  return CATEGORY_COLORS.get(name) ?? '#78716c';
 }
 
 /** A bill, subscription, income or other payment that repeats. */
@@ -74,6 +76,14 @@ export type RecurringPayment = Row & {
   remind_days_before?: number | null;
   /** Amount changes, oldest first. Recorded automatically when the amount is edited. */
   price_history?: PriceChange[];
+  /**
+   * Payments due before this date count as already paid without a tick (e.g.
+   * rent that started years ago). Null: none are assumed. Missing (bills saved
+   * before this field existed): the date the bill was added.
+   */
+  paid_before?: string | null;
+  /** Unpaid payments due before this date are skipped, e.g. months the bill was paused. */
+  skip_before?: string | null;
 };
 
 export type PriceChange = { from_minor: number; to_minor: number; date: string };
@@ -176,19 +186,32 @@ export function occurrencesBetween(
   return dates;
 }
 
+/**
+ * The date of the `count`th payment from `from` onwards, following the real
+ * schedule (so a bill on the 31st isn't cut short by passing through a
+ * shorter month). Used to turn "after N payments" into an end date.
+ */
+export function endAfterPayments(p: Schedule, from: string, count: number): string | null {
+  const dues = occurrencesBetween({ ...p, end_date: null }, from, addMonthsClamped(from, 12 * count + 12));
+  return dues[count - 1] ?? null;
+}
+
 /** The first due date on or after `ymd`, or null if the series has ended. */
 export function nextDueOnOrAfter(p: RecurringPayment, ymd: string): string | null {
   // A yearly bill is always due within the next 12 months.
   return occurrencesBetween(p, ymd, addMonthsClamped(ymd, 13))[0] ?? null;
 }
 
+/** Unpaid due dates of `p` from `ymd` onwards (a year ahead covers every frequency). */
+function unpaidDuesFrom(p: RecurringPayment, transactions: Transaction[], ymd: string): string[] {
+  return occurrencesInRange([p], transactions, ymd, addMonthsClamped(ymd, 13))
+    .filter((o) => !isSettled(o))
+    .map((o) => o.due);
+}
+
 /** The first due date on or after `ymd` that hasn't been ticked off, or null. */
 export function nextUnpaidDue(p: RecurringPayment, transactions: Transaction[], ymd: string): string | null {
-  return (
-    occurrencesInRange([{ ...p, paused: false }], transactions, ymd, addMonthsClamped(ymd, 13)).find(
-      (o) => !isSettled(o)
-    )?.due ?? null
-  );
+  return unpaidDuesFrom(p, transactions, ymd)[0] ?? null;
 }
 
 /** Average cost per month in pence (may be fractional; round when displaying). */
@@ -219,11 +242,19 @@ export type Occurrence = {
   /** The transaction that paid it, if ticked off. */
   paid: Transaction | null;
   /**
-   * Due before the bill was added to the app. Counted as paid (so adding rent
+   * Due before the bill's `paid_before` date. Counted as paid (so adding rent
    * that started years ago doesn't produce a pile of "overdue" payments), but
    * can't be unticked because there's no transaction to remove.
    */
   assumed: boolean;
+  /**
+   * A ticked-off payment that's no longer part of the bill's live schedule:
+   * the bill was paused, deleted, or moved to a new date. Kept so paid
+   * history and totals don't change.
+   */
+  detached?: boolean;
+  /** The bill itself has been deleted (`payment` is rebuilt from the payment record). */
+  deleted?: boolean;
 };
 
 export const isSettled = (o: Occurrence) => !!o.paid || o.assumed;
@@ -234,24 +265,65 @@ export const occurrenceAmount = (o: Occurrence) => o.paid?.amount_minor ?? o.pay
 /** How far back unpaid bills still count as overdue. */
 const OVERDUE_LOOKBACK_DAYS = 90;
 
-/** Occurrences of every unpaused payment between `from` and `to`, sorted by date. */
+/**
+ * Occurrences of every unpaused payment between `from` and `to`, sorted by date.
+ *
+ * Payments already ticked off are always included, even if their bill has
+ * since been paused, re-scheduled or deleted, so paid totals never change
+ * after the fact. Pass `allPayments` (every stored payment) to include those
+ * of deleted bills; without it only `payments`' own ticks are considered.
+ */
 export function occurrencesInRange(
   payments: RecurringPayment[],
   transactions: Transaction[],
   from: string,
-  to: string
+  to: string,
+  allPayments?: RecurringPayment[]
 ): Occurrence[] {
   const paidBy = new Map<string, Transaction>();
   for (const t of transactions) {
     if (t.recurring_id && t.due_date) paidBy.set(`${t.recurring_id}|${t.due_date}`, t);
   }
+  const used = new Set<string>();
   const result: Occurrence[] = [];
   for (const p of payments) {
     if (p.paused) continue;
-    const added = toYMD(new Date(p.created_at));
+    const paidBefore = p.paid_before === undefined ? toYMD(new Date(p.created_at)) : p.paid_before;
     for (const due of occurrencesBetween(p, from, to)) {
-      const paid = paidBy.get(`${p.id}|${due}`) ?? null;
-      result.push({ payment: p, due, paid, assumed: !paid && due < added });
+      const key = `${p.id}|${due}`;
+      const paid = paidBy.get(key) ?? null;
+      if (!paid && p.skip_before && due < p.skip_before) continue;
+      if (paid) used.add(key);
+      result.push({ payment: p, due, paid, assumed: !paid && paidBefore != null && due < paidBefore });
+    }
+  }
+  const byId = new Map(payments.map((p) => [p.id, p]));
+  const known = allPayments ? new Set(allPayments.map((p) => p.id)) : null;
+  for (const [key, t] of paidBy) {
+    if (used.has(key) || t.due_date! < from || t.due_date! > to) continue;
+    const p = byId.get(t.recurring_id!);
+    if (p) {
+      result.push({ payment: p, due: t.due_date!, paid: t, assumed: false, detached: true });
+    } else if (known && !known.has(t.recurring_id!)) {
+      result.push({
+        payment: {
+          id: t.recurring_id!,
+          created_at: t.created_at,
+          name: t.name,
+          amount_minor: t.amount_minor,
+          direction: 'out',
+          frequency: 'monthly',
+          anchor_date: t.due_date!,
+          end_date: t.due_date!,
+          category: t.category,
+          paused: false,
+        },
+        due: t.due_date!,
+        paid: t,
+        assumed: false,
+        detached: true,
+        deleted: true,
+      });
     }
   }
   return result.sort((a, b) => a.due.localeCompare(b.due) || a.payment.name.localeCompare(b.payment.name));
@@ -265,9 +337,11 @@ export function overdueStart(today: string) {
 const REMINDER_HOUR = 9;
 
 /**
- * When to remind about `p`: the first unpaid occurrence whose reminder time
- * (9am, `remind_days_before` days ahead of the due date) is still in the
- * future. Null for income, paused/ended bills, or reminders turned off.
+ * When to remind about `p`, for its first unpaid occurrence: 9am,
+ * `remind_days_before` days ahead of the due date. If that time has already
+ * passed (e.g. the bill was added two days before it's due), the next 9am
+ * that's still on or before the due date is used instead. Null for income,
+ * paused/ended bills, or reminders turned off.
  */
 export function nextReminder(
   p: RecurringPayment,
@@ -277,13 +351,32 @@ export function nextReminder(
   const days = p.remind_days_before;
   const today = toYMD(now);
   if (p.direction !== 'out' || days == null || !isActive(p, today)) return null;
-  for (const o of occurrencesInRange([p], transactions, today, addMonthsClamped(today, 13))) {
-    if (isSettled(o)) continue;
-    const at = fromYMD(addDays(o.due, -days));
-    at.setHours(REMINDER_HOUR, 0, 0, 0);
-    if (at > now) return { at, due: o.due };
+  const next9am = fromYMD(now.getHours() < REMINDER_HOUR ? today : addDays(today, 1));
+  next9am.setHours(REMINDER_HOUR, 0, 0, 0);
+  for (const due of unpaidDuesFrom(p, transactions, today)) {
+    const planned = fromYMD(addDays(due, -days));
+    planned.setHours(REMINDER_HOUR, 0, 0, 0);
+    const at = planned > now ? planned : next9am;
+    if (toYMD(at) <= due) return { at, due };
   }
   return null;
+}
+
+/**
+ * Price history after changing `p`'s amount to `to` on `today`. Edits on the
+ * day the bill was added, or on the same day as the last change, are treated
+ * as corrections: they don't add a new entry (and cancel out if the amount
+ * goes back to where it was).
+ */
+export function recordPriceChange(p: RecurringPayment, to: number, today: string): PriceChange[] {
+  const history = p.price_history ?? [];
+  const last = history[history.length - 1];
+  if (last && last.date === today) {
+    const rest = history.slice(0, -1);
+    return last.from_minor === to ? rest : [...rest, { ...last, to_minor: to }];
+  }
+  if (history.length === 0 && toYMD(new Date(p.created_at)) === today) return history;
+  return [...history, { from_minor: p.amount_minor, to_minor: to, date: today }];
 }
 
 /** The most recent price change, if it happened within `withinDays` of `today`. */
@@ -336,11 +429,14 @@ export type PeriodSummary = {
   buffer: number;
   /** Buffer, or unexpected spend if it went over: the buffer covers surprises up to its size. */
   setAside: number;
-  /** income − bills − setAside. Only meaningful when `hasIncome`. */
+  /** income − bills − setAside − pots. Only meaningful when `hasIncome`. */
   leftToSpend: number;
   /** bills + setAside: everything spoken for, for users who don't track income. */
   committed: number;
+  /** Some income falls in this period. */
   hasIncome: boolean;
+  /** Any income is set up at all (even if none falls in this period). */
+  anyIncome: boolean;
   /** Put into savings pots this period. */
   pots: number;
   /** Unexpected costs paid from pots (already saved, so not counted again). */
@@ -354,7 +450,7 @@ export function summarisePeriod(
   bufferMinor: number,
   potsMinor = 0
 ): PeriodSummary {
-  const occ = occurrencesInRange(payments, transactions, period.start, period.end);
+  const occ = occurrencesInRange(payments, transactions, period.start, period.end, payments);
   const sum = (list: Occurrence[]) => list.reduce((s, o) => s + occurrenceAmount(o), 0);
   const outs = occ.filter((o) => o.payment.direction === 'out');
   const allUnexpected = transactions.filter(
@@ -377,7 +473,8 @@ export function summarisePeriod(
     setAside,
     leftToSpend: income - bills - setAside - potsMinor,
     committed: bills + setAside + potsMinor,
-    hasIncome: payments.some((p) => p.direction === 'in'),
+    hasIncome: occ.some((o) => o.payment.direction === 'in'),
+    anyIncome: payments.some((p) => p.direction === 'in'),
     pots: potsMinor,
     fromPots,
   };
@@ -522,17 +619,26 @@ export const DEFAULT_SETTINGS: FinanceSettings = {
 
 const SETTINGS_KEY = 'finance:settings';
 
+/** Parses stored settings, falling back to defaults for anything missing, unreadable or out of range. */
+function parseSettings(raw: string | null): FinanceSettings {
+  let parsed: unknown = {};
+  try {
+    parsed = raw ? JSON.parse(raw) : {};
+  } catch {
+    console.warn('Money settings were unreadable, using defaults.');
+  }
+  const s = { ...DEFAULT_SETTINGS, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+  if (!Number.isInteger(s.periodStartDay) || s.periodStartDay < 1 || s.periodStartDay > 28) s.periodStartDay = 1;
+  if (!Number.isSafeInteger(s.bufferMinor) || s.bufferMinor < 0) s.bufferMinor = 0;
+  s.hideIncomeHint = s.hideIncomeHint === true;
+  s.showBillsOnPlanner = s.showBillsOnPlanner === true;
+  return s;
+}
+
+/** For display: never throws, using defaults if storage can't be read. */
 export async function loadFinanceSettings(): Promise<FinanceSettings> {
   try {
-    const raw = await AsyncStorage.getItem(SETTINGS_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    const s = { ...DEFAULT_SETTINGS, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
-    // Fall back to defaults for anything out of range rather than failing.
-    if (!Number.isInteger(s.periodStartDay) || s.periodStartDay < 1 || s.periodStartDay > 28) s.periodStartDay = 1;
-    if (!Number.isSafeInteger(s.bufferMinor) || s.bufferMinor < 0) s.bufferMinor = 0;
-    s.hideIncomeHint = s.hideIncomeHint === true;
-    s.showBillsOnPlanner = s.showBillsOnPlanner === true;
-    return s;
+    return parseSettings(await AsyncStorage.getItem(SETTINGS_KEY));
   } catch (e) {
     console.warn('Could not read money settings, using defaults:', e);
     return DEFAULT_SETTINGS;
@@ -553,6 +659,8 @@ export function useFinance() {
   const [pots, setPots] = useState<Pot[]>([]);
   const [potEntries, setPotEntries] = useState<PotEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
+  /** The last load failed; the screen shows an error instead of looking empty. */
+  const [loadError, setLoadError] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -584,8 +692,10 @@ export function useFinance() {
       setSettings(s);
       setPots(pots);
       setPotEntries(entries);
+      setLoadError(false);
     } catch (e) {
       console.error('Failed to load money data:', e);
+      setLoadError(true);
     } finally {
       setLoaded(true);
     }
@@ -618,23 +728,26 @@ export function useFinance() {
     [run]
   );
 
-  /** Saves edits. A changed amount is added to the bill's price history. */
+  /**
+   * Saves edits. A changed amount is added to the bill's price history, and
+   * unpausing skips the payments that fell while it was paused.
+   */
   const updatePayment = useCallback(
     (id: string, input: RecurringInput) =>
       run(() =>
         updateRows(
           'finance_recurring',
           (r) => r.id === id,
-          (r) =>
-            r.amount_minor === input.amount_minor
-              ? input
-              : {
-                  ...input,
-                  price_history: [
-                    ...(r.price_history ?? []),
-                    { from_minor: r.amount_minor, to_minor: input.amount_minor, date: toYMD(new Date()) },
-                  ],
-                }
+          (r) => {
+            const old = r as RecurringPayment;
+            const today = todayYMD();
+            const patch: Partial<RecurringPayment> = { ...input };
+            if (old.paused && !input.paused) patch.skip_before = today;
+            if (old.amount_minor !== input.amount_minor) {
+              patch.price_history = recordPriceChange(old, input.amount_minor, today);
+            }
+            return patch;
+          }
         )
       ),
     [run]
@@ -653,7 +766,7 @@ export function useFinance() {
           'finance_transactions',
           (t) => t.recurring_id === occ.payment.id && t.due_date === occ.due,
           {
-            date: toYMD(new Date()),
+            date: todayYMD(),
             amount_minor: occ.payment.amount_minor,
             name: occ.payment.name,
             category: occ.payment.category,
@@ -698,8 +811,10 @@ export function useFinance() {
   const saveSettings = useCallback(
     (patch: Partial<FinanceSettings>) =>
       run(async () => {
-        // Merge with what's stored, not what's on screen, so two quick saves can't undo each other.
-        const next = { ...(await loadFinanceSettings()), ...patch };
+        // Merge with what's stored, not what's on screen, so two quick saves can't
+        // undo each other. A failed read throws here (and the save is reported
+        // as failed) rather than writing defaults over the user's settings.
+        const next = { ...parseSettings(await AsyncStorage.getItem(SETTINGS_KEY)), ...patch };
         await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
       }),
     [run]
@@ -748,6 +863,8 @@ export function useFinance() {
     pots,
     potEntries,
     loaded,
+    loadError,
+    reload,
     addPot,
     updatePot,
     deletePot,

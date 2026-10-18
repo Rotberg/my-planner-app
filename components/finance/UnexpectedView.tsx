@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { categoryColor, Period, Pot, Transaction, UnexpectedInput } from '../../utils/finance';
 import { formatMoney, parseMoney } from '../../utils/money';
+import { formatDay } from '../../utils/dates';
 import { useTheme } from '../../utils/theme';
-import { shortDate } from './OccurrenceRow';
 import UnexpectedChart from './UnexpectedChart';
 
 type Props = {
@@ -17,6 +17,8 @@ type Props = {
   onQuickAdd: (input: UnexpectedInput) => Promise<boolean>;
   onMoreDetails: (draft: { name: string; amount: string }) => void;
   onEdit: (entry: Transaction) => void;
+  /** Changes when a cost started from "More details…" is saved, to clear the boxes. */
+  clearKey: number;
 };
 
 /** Older entries shown below this period's, newest first. */
@@ -33,14 +35,25 @@ export default function UnexpectedView({
   onQuickAdd,
   onMoreDetails,
   onEdit,
+  clearKey,
 }: Props) {
   const theme = useTheme();
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
+  // Return and the Add button can both fire before the first save finishes.
+  const saving = useRef(false);
+
+  useEffect(() => {
+    if (clearKey === 0) return;
+    setName('');
+    setAmount('');
+  }, [clearKey]);
 
   const unexpected = transactions
     .filter((t) => t.kind === 'unexpected')
     .sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at));
+  // Dated after this period (e.g. a repair booked for next month), shown so it can still be edited.
+  const upcoming = unexpected.filter((t) => t.date > period.end);
   const current = unexpected.filter((t) => t.date >= period.start && t.date <= period.end);
   const earlier = unexpected.filter((t) => t.date < period.start).slice(0, EARLIER_LIMIT);
   const total = current.reduce((s, t) => s + t.amount_minor, 0);
@@ -49,6 +62,7 @@ export default function UnexpectedView({
   const potName = (id: string) => pots.find((p) => p.id === id)?.name ?? 'a pot';
 
   async function quickAdd() {
+    if (saving.current) return;
     const amountMinor = parseMoney(amount);
     if (amountMinor == null || amountMinor === 0) {
       Alert.alert('Invalid amount', 'Enter an amount like 12 or 12.99.');
@@ -58,10 +72,15 @@ export default function UnexpectedView({
       Alert.alert('Missing description', 'What was this for?');
       return;
     }
-    const ok = await onQuickAdd({ name: name.trim(), amount_minor: amountMinor, date: today, category: 'Other' });
-    if (ok) {
-      setName('');
-      setAmount('');
+    saving.current = true;
+    try {
+      const ok = await onQuickAdd({ name: name.trim(), amount_minor: amountMinor, date: today, category: 'Other' });
+      if (ok) {
+        setName('');
+        setAmount('');
+      }
+    } finally {
+      saving.current = false;
     }
   }
 
@@ -79,7 +98,7 @@ export default function UnexpectedView({
             {t.name}
           </Text>
           <Text className="text-xs text-stone-500 dark:text-stone-400">
-            {shortDate(t.date)} · {t.category}
+            {formatDay(t.date)} · {t.category}
             {t.pot_id ? ` · from ${potName(t.pot_id)}` : ''}
           </Text>
         </View>
@@ -124,9 +143,8 @@ export default function UnexpectedView({
           <TouchableOpacity
             hitSlop={8}
             onPress={() => {
+              // Kept until the cost is saved, so cancelling doesn't lose what was typed.
               onMoreDetails({ name, amount });
-              setName('');
-              setAmount('');
             }}
           >
             <Text className="text-xs font-semibold text-teal-600">More details…</Text>
@@ -160,6 +178,16 @@ export default function UnexpectedView({
         </Text>
       ) : (
         current.map(entryRow)
+      )}
+
+      {/* ── Upcoming ── */}
+      {upcoming.length > 0 && (
+        <>
+          <Text className="text-xs font-bold uppercase tracking-wide mt-3 mb-2 text-stone-500 dark:text-stone-400">
+            Upcoming
+          </Text>
+          {upcoming.map(entryRow)}
+        </>
       )}
 
       {/* ── Earlier ── */}

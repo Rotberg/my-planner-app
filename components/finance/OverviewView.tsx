@@ -162,7 +162,7 @@ export default function OverviewView({
       </View>
 
       {/* ── Income hint ── */}
-      {!s.hasIncome && !settings.hideIncomeHint && (
+      {!s.anyIncome && !settings.hideIncomeHint && (
         <View className="flex-row items-center p-3 mb-3 rounded-xl bg-teal-50 dark:bg-teal-950">
           <TouchableOpacity className="flex-1 pr-2" onPress={onAddIncome}>
             <Text className="text-sm text-teal-800 dark:text-teal-200">

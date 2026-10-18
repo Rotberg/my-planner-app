@@ -4,7 +4,7 @@ import { Alert, ScrollView, Text, TouchableOpacity, View, useColorScheme } from 
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import TaskForm from '../components/TaskForm';
-import { buildMonthGrid } from '../utils/dates';
+import { buildMonthGrid, DAY_LABELS } from '../utils/dates';
 import {
   isSettled,
   loadFinanceSettings,
@@ -81,7 +81,6 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function bmi(weightKg: number, heightCm: number) {
   const m = heightCm / 100;
@@ -131,6 +130,7 @@ export default function PlannerScreen() {
   const [userHeight, setUserHeight] = useState<number | null>(null);
   const [billsEnabled, setBillsEnabled] = useState(false);
   const [bills, setBills] = useState<RecurringPayment[]>([]);
+  const [allPayments, setAllPayments] = useState<RecurringPayment[]>([]);
   const [billTransactions, setBillTransactions] = useState<Transaction[]>([]);
 
   const [formOpen, setFormOpen] = useState(false);
@@ -167,6 +167,7 @@ export default function PlannerScreen() {
         selectRows<Transaction>('finance_transactions'),
       ]);
       setBills(payments.filter((p) => p.direction === 'out'));
+      setAllPayments(payments);
       setBillTransactions(transactions);
     } catch (e) {
       console.error('Failed to load bills:', e);
@@ -285,7 +286,9 @@ export default function PlannerScreen() {
   const showBills = billsEnabled && filters.bills;
   const gridBillDays = new Set(
     showBills
-      ? occurrencesInRange(bills, billTransactions, toYMD(calendarDays[0]), toYMD(calendarDays[41])).map((o) => o.due)
+      ? occurrencesInRange(bills, billTransactions, toYMD(calendarDays[0]), toYMD(calendarDays[41]), allPayments).map(
+          (o) => o.due
+        )
       : []
   );
 
@@ -305,7 +308,7 @@ export default function PlannerScreen() {
   const dayTasks    = visibleTasksOn(selectedDate);
   const daySessions = filters.workouts ? sessions.filter((s) => s.performed_at === selectedDate) : [];
   const dayHealth   = filters.health ? healthStats.filter((s) => s.recorded_at === selectedDate) : [];
-  const dayBills    = showBills ? occurrencesInRange(bills, billTransactions, selectedDate, selectedDate) : [];
+  const dayBills    = showBills ? occurrencesInRange(bills, billTransactions, selectedDate, selectedDate, allPayments) : [];
   const dayHasAnything = dayTasks.length + daySessions.length + dayHealth.length + dayBills.length > 0;
   const isOnToday =
     selectedDate === todayYMD && displayMonth === today.getMonth() && displayYear === today.getFullYear();

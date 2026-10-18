@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
-import { fromYMD } from '../../utils/dates';
+import { formatDay, fromYMD } from '../../utils/dates';
 import {
   categoryColor,
   FREQUENCY_OPTIONS,
@@ -20,7 +20,7 @@ import {
 } from '../../utils/finance';
 import { formatMoney } from '../../utils/money';
 import BillsCalendar from './BillsCalendar';
-import { OccurrenceRow, shortDate } from './OccurrenceRow';
+import { OccurrenceRow } from './OccurrenceRow';
 import { addDays } from '../../utils/recurrence';
 
 type Props = {
@@ -48,7 +48,8 @@ export default function BillsView({ payments, transactions, today, period, perio
   const active = out.filter((p) => isActive(p, today));
   const perMonth = active.reduce((sum, p) => sum + monthlyEquivalent(p.amount_minor, p.frequency), 0);
 
-  const all = occurrencesInRange(out, transactions, overdueStart(today), nextPeriod.end);
+  // `payments` (not just bills) so ticks for deleted bills still count.
+  const all = occurrencesInRange(out, transactions, overdueStart(today), nextPeriod.end, payments);
   const overdue = all.filter((o) => o.due < today && !isSettled(o));
   const paidEarlier = all.filter((o) => o.due >= period.start && o.due < today && isSettled(o));
   const thisWeek = all.filter((o) => o.due >= today && o.due <= weekEnd);
@@ -57,7 +58,10 @@ export default function BillsView({ payments, transactions, today, period, perio
 
   const inPeriod = all.filter((o) => o.due >= period.start && o.due <= period.end);
   const paidTotal = inPeriod.filter(isSettled).reduce((s, o) => s + occurrenceAmount(o), 0);
-  const dueTotal = inPeriod.filter((o) => !isSettled(o)).reduce((s, o) => s + occurrenceAmount(o), 0);
+  // This period's unpaid bills plus anything still overdue from before it.
+  const dueTotal = [...inPeriod, ...overdue.filter((o) => o.due < period.start)]
+    .filter((o) => !isSettled(o))
+    .reduce((s, o) => s + occurrenceAmount(o), 0);
   const monthName = fromYMD(today).toLocaleDateString(undefined, { month: 'long' });
   const thisLabel = calendarMonths ? monthName : 'this pay period';
 
@@ -85,7 +89,7 @@ export default function BillsView({ payments, transactions, today, period, perio
 
   function paymentRow(p: RecurringPayment) {
     const next = isActive(p, today) ? nextUnpaidDue(p, transactions, today) : null;
-    const status = p.paused ? 'Paused' : next ? `Next ${shortDate(next)}` : 'Ended';
+    const status = p.paused ? 'Paused' : next ? `Next ${formatDay(next)}` : 'Ended';
     const change = recentPriceChange(p, today);
     return (
       <TouchableOpacity
@@ -105,7 +109,11 @@ export default function BillsView({ payments, transactions, today, period, perio
             {p.direction === 'out' && p.remind_days_before != null ? ' · 🔔' : ''}
           </Text>
           {change && (
-            <Text className="text-[11px] font-semibold" style={{ color: change.to_minor > change.from_minor ? '#e11d48' : '#16a34a' }}>
+            <Text
+              className="text-[11px] font-semibold"
+              // A rise is bad news for a bill but good news for income.
+              style={{ color: (change.to_minor > change.from_minor) === (p.direction === 'out') ? '#e11d48' : '#16a34a' }}
+            >
               {change.to_minor > change.from_minor ? '▲ Up' : '▼ Down'} {formatMoney(Math.abs(change.to_minor - change.from_minor))}{' '}
               from {formatMoney(change.from_minor)}
             </Text>
@@ -190,6 +198,7 @@ export default function BillsView({ payments, transactions, today, period, perio
       {mode === 'calendar' ? (
         <BillsCalendar
           bills={out}
+          allPayments={payments}
           transactions={transactions}
           today={today}
           onEdit={onEdit}

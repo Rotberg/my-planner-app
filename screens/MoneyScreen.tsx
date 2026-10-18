@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Platform, Pressable, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import BillForm from '../components/finance/BillForm';
@@ -45,11 +45,26 @@ export default function MoneyScreen() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [potOpen, setPotOpen] = useState(false);
   const [editingPot, setEditingPot] = useState<Pot | null>(null);
+  // What the settings sheet shows, fixed when it opens so a reload can't overwrite typing.
+  const [settingsSnapshot, setSettingsSnapshot] = useState(settings);
+  // Bumped after a "More details…" cost saves, to clear the quick-add boxes it came from.
+  const [quickAddClearKey, setQuickAddClearKey] = useState(0);
 
-  // Keep reminders in step with bills and ticks (reloaded after every change).
+  // Re-sync reminders only when something that affects them changes, not on
+  // every reload (unexpected costs, settings and pots never do).
+  const reminderKey = JSON.stringify([
+    payments
+      .filter((p) => p.direction === 'out')
+      .map((p) => [p.id, p.name, p.amount_minor, p.frequency, p.anchor_date, p.end_date, p.paused, p.remind_days_before, p.paid_before, p.skip_before]),
+    transactions.filter((t) => t.recurring_id).map((t) => `${t.recurring_id}|${t.due_date}`),
+  ]);
+  const latest = useRef({ payments, transactions });
   useEffect(() => {
-    if (loaded) syncBillReminders({ payments, transactions });
-  }, [loaded, payments, transactions]);
+    latest.current = { payments, transactions };
+  });
+  useEffect(() => {
+    if (loaded) syncBillReminders(latest.current);
+  }, [loaded, reminderKey]);
 
   const today = todayYMD();
   const period = periodFor(today, settings.periodStartDay);
@@ -70,7 +85,11 @@ export default function MoneyScreen() {
     const ok = editingBill ? await finance.updatePayment(editingBill.id, input) : await finance.addPayment(input);
     if (!ok) return;
     setBillOpen(false);
-    if (input.remind_days_before != null && Platform.OS !== 'web' && !(await requestNotificationPermissions())) {
+    if (input.remind_days_before == null || Platform.OS === 'web') return;
+    if (await requestNotificationPermissions().catch(() => false)) {
+      // The sync after saving ran before permission was granted, so run it again.
+      syncBillReminders();
+    } else {
       Alert.alert(
         'Notifications are off',
         'The bill is saved, but reminders can’t be sent until you allow notifications for this app in your phone’s settings.'
@@ -97,11 +116,18 @@ export default function MoneyScreen() {
     const ok = editingEntry
       ? await finance.updateUnexpected(editingEntry.id, input)
       : await finance.addUnexpected(input);
-    if (ok) setUnexpectedOpen(false);
+    if (!ok) return;
+    setUnexpectedOpen(false);
+    if (!editingEntry && draft) setQuickAddClearKey((k) => k + 1);
   }
 
   async function deleteUnexpected() {
     if (editingEntry && (await finance.deleteTransaction(editingEntry.id))) setUnexpectedOpen(false);
+  }
+
+  function openSettings() {
+    setSettingsSnapshot(settings);
+    setSettingsOpen(true);
   }
 
   function openPot(pot: Pot | null) {
@@ -138,7 +164,7 @@ export default function MoneyScreen() {
       <View className="flex-row items-center justify-between px-4 pt-4">
         <Text className="text-2xl font-bold text-stone-800 dark:text-stone-100">Money</Text>
         <View className="flex-row items-center" style={{ gap: 12 }}>
-          <TouchableOpacity hitSlop={10} onPress={() => setSettingsOpen(true)} accessibilityLabel="Money settings">
+          <TouchableOpacity hitSlop={10} onPress={openSettings} accessibilityLabel="Money settings">
             <IconSymbol name="gearshape.fill" size={22} color={theme.icon} />
           </TouchableOpacity>
           {view !== 'unexpected' && (
@@ -171,7 +197,21 @@ export default function MoneyScreen() {
       </View>
 
       <ScrollView contentContainerStyle={{ paddingBottom: 32 }} keyboardShouldPersistTaps="handled">
-        {loaded && view === 'overview' && (
+        {finance.loadError && (
+          // Shown instead of the sections, so a failed read doesn't look like "no bills yet".
+          <View className="mx-4 p-4 rounded-xl bg-rose-50 dark:bg-rose-950">
+            <Text className="text-sm font-semibold text-rose-800 dark:text-rose-200">
+              Your money data couldn’t be loaded
+            </Text>
+            <Text className="text-xs text-rose-700 dark:text-rose-300 mt-1 mb-3">
+              Nothing has been lost. Try again, and if it keeps happening, restart the app before adding anything.
+            </Text>
+            <TouchableOpacity className="self-start bg-rose-600 rounded-lg px-4 py-2" onPress={finance.reload}>
+              <Text className="text-white text-sm font-bold">Try again</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {loaded && !finance.loadError && view === 'overview' && (
           <OverviewView
             payments={payments}
             transactions={transactions}
@@ -183,12 +223,12 @@ export default function MoneyScreen() {
             onTogglePaid={togglePaid}
             onAddIncome={() => openAddBill('in')}
             onDismissIncomeHint={() => finance.saveSettings({ hideIncomeHint: true })}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={openSettings}
             onOpenPot={(pot) => openPot(pot)}
             onAddPot={() => openPot(null)}
           />
         )}
-        {loaded && view === 'bills' && (
+        {loaded && !finance.loadError && view === 'bills' && (
           <BillsView
             payments={payments}
             transactions={transactions}
@@ -199,7 +239,7 @@ export default function MoneyScreen() {
             onTogglePaid={togglePaid}
           />
         )}
-        {loaded && view === 'unexpected' && (
+        {loaded && !finance.loadError && view === 'unexpected' && (
           <UnexpectedView
             transactions={transactions}
             period={period}
@@ -211,6 +251,7 @@ export default function MoneyScreen() {
             onQuickAdd={finance.addUnexpected}
             onMoreDetails={(d) => openUnexpected(null, d)}
             onEdit={(entry) => openUnexpected(entry)}
+            clearKey={quickAddClearKey}
           />
         )}
       </ScrollView>
@@ -219,6 +260,7 @@ export default function MoneyScreen() {
         visible={billOpen}
         bill={editingBill}
         defaultDirection={newDirection}
+        transactions={transactions}
         onSubmit={submitBill}
         onDelete={deleteBill}
         onClose={() => setBillOpen(false)}
@@ -244,7 +286,7 @@ export default function MoneyScreen() {
       />
       <MoneySettings
         visible={settingsOpen}
-        settings={settings}
+        settings={settingsSnapshot}
         onSave={saveSettings}
         onClose={() => setSettingsOpen(false)}
       />
