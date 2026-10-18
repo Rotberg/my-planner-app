@@ -70,9 +70,25 @@ export type RecurringPayment = Row & {
   category: string;
   paused: boolean;
   notes?: string;
+  /** Days before each due date to send a reminder (0 = on the day), or null/missing for none. */
+  remind_days_before?: number | null;
+  /** Amount changes, oldest first. Recorded automatically when the amount is edited. */
+  price_history?: PriceChange[];
 };
 
-export type RecurringInput = Omit<RecurringPayment, 'id' | 'created_at'>;
+export type PriceChange = { from_minor: number; to_minor: number; date: string };
+
+export type RecurringInput = Omit<RecurringPayment, 'id' | 'created_at' | 'price_history'>;
+
+export const REMINDER_OPTIONS: { value: number | null; label: string }[] = [
+  { value: null, label: 'Off' },
+  { value: 0, label: 'On the day' },
+  { value: 1, label: '1 day before' },
+  { value: 3, label: '3 days before' },
+  { value: 7, label: '7 days before' },
+];
+
+export const DEFAULT_REMINDER_DAYS = 3;
 
 /** Money actually paid: a ticked-off bill occurrence, or an unexpected cost. */
 export type Transaction = Row & {
@@ -135,6 +151,15 @@ export function occurrencesBetween(
 export function nextDueOnOrAfter(p: RecurringPayment, ymd: string): string | null {
   // A yearly bill is always due within the next 12 months.
   return occurrencesBetween(p, ymd, addMonthsClamped(ymd, 13))[0] ?? null;
+}
+
+/** The first due date on or after `ymd` that hasn't been ticked off, or null. */
+export function nextUnpaidDue(p: RecurringPayment, transactions: Transaction[], ymd: string): string | null {
+  return (
+    occurrencesInRange([{ ...p, paused: false }], transactions, ymd, addMonthsClamped(ymd, 13)).find(
+      (o) => !isSettled(o)
+    )?.due ?? null
+  );
 }
 
 /** Average cost per month in pence (may be fractional; round when displaying). */
@@ -205,6 +230,37 @@ export function occurrencesInRange(
 
 export function overdueStart(today: string) {
   return addDays(today, -OVERDUE_LOOKBACK_DAYS);
+}
+
+/** Hour of day reminders are sent at. */
+const REMINDER_HOUR = 9;
+
+/**
+ * When to remind about `p`: the first unpaid occurrence whose reminder time
+ * (9am, `remind_days_before` days ahead of the due date) is still in the
+ * future. Null for income, paused/ended bills, or reminders turned off.
+ */
+export function nextReminder(
+  p: RecurringPayment,
+  transactions: Transaction[],
+  now: Date
+): { at: Date; due: string } | null {
+  const days = p.remind_days_before;
+  const today = toYMD(now);
+  if (p.direction !== 'out' || days == null || !isActive(p, today)) return null;
+  for (const o of occurrencesInRange([p], transactions, today, addMonthsClamped(today, 13))) {
+    if (isSettled(o)) continue;
+    const at = fromYMD(addDays(o.due, -days));
+    at.setHours(REMINDER_HOUR, 0, 0, 0);
+    if (at > now) return { at, due: o.due };
+  }
+  return null;
+}
+
+/** The most recent price change, if it happened within `withinDays` of `today`. */
+export function recentPriceChange(p: RecurringPayment, today: string, withinDays = 60): PriceChange | null {
+  const last = p.price_history?.[p.price_history.length - 1];
+  return last && daysBetween(last.date, today) <= withinDays ? last : null;
 }
 
 // ─── Budget periods ──────────────────────────────────────────────────────────
@@ -376,9 +432,25 @@ export function useFinance() {
     [run]
   );
 
+  /** Saves edits. A changed amount is added to the bill's price history. */
   const updatePayment = useCallback(
     (id: string, input: RecurringInput) =>
-      run(() => updateRows('finance_recurring', (r) => r.id === id, () => input)),
+      run(() =>
+        updateRows(
+          'finance_recurring',
+          (r) => r.id === id,
+          (r) =>
+            r.amount_minor === input.amount_minor
+              ? input
+              : {
+                  ...input,
+                  price_history: [
+                    ...(r.price_history ?? []),
+                    { from_minor: r.amount_minor, to_minor: input.amount_minor, date: toYMD(new Date()) },
+                  ],
+                }
+        )
+      ),
     [run]
   );
 

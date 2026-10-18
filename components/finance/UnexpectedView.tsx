@@ -3,7 +3,7 @@ import { Alert, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { categoryColor, Period, Transaction, UnexpectedInput } from '../../utils/finance';
 import { formatMoney, parseMoney } from '../../utils/money';
 import { useTheme } from '../../utils/theme';
-import { shortDate } from './BillsView';
+import { shortDate } from './OccurrenceRow';
 
 type Props = {
   transactions: Transaction[];

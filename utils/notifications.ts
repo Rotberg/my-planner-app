@@ -19,6 +19,12 @@ export async function requestNotificationPermissions(): Promise<boolean> {
       importance: Notifications.AndroidImportance.HIGH,
       sound: 'default',
     });
+    // Separate channel so bill reminders can be muted on their own.
+    await Notifications.setNotificationChannelAsync('bills', {
+      name: 'Bill Reminders',
+      importance: Notifications.AndroidImportance.DEFAULT,
+      sound: 'default',
+    });
   }
 
   const { status: existing } = await Notifications.getPermissionsAsync();

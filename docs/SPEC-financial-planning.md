@@ -152,7 +152,6 @@ Add to `TableName` in `utils/localDb.ts`:
 | 'finance_recurring'      // bills, subscriptions, income
 | 'finance_transactions'   // paid occurrences + unexpected + pot spends
 | 'finance_pots'           // sinking funds + the buffer
-| 'finance_price_changes'  // amount history for recurring items
 ```
 
 ```ts
@@ -166,8 +165,8 @@ type RecurringPayment = Row & {
   anchor_date: string;          // first due date, YYYY-MM-DD; its day is kept for monthly+ (31 → clamps)
   end_date: string | null;      // "after N payments" is converted to an end date when saved
   category: string;
-  remind_days_before: number | null;   // null = off
-  notification_id?: string | null;
+  remind_days_before?: number | null;  // null/missing = off; new bills default to 3
+  price_history?: PriceChange[];       // appended automatically when the amount is edited
   paused: boolean;
   notes?: string;
 };
@@ -195,10 +194,12 @@ type Pot = Row & {
   rollover: boolean;
 };
 
-type PriceChange = Row & { recurring_id: string; from_minor: number; to_minor: number; effective: string };
+type PriceChange = { from_minor: number; to_minor: number; date: string };  // stored on the bill, so one write
 ```
 
-Cascade: deleting a `finance_recurring` row should **not** delete its transactions (paid history is still real). Add `finance_recurring → finance_price_changes` to `CASCADES` only.
+Deleting a `finance_recurring` row does **not** delete its transactions (paid history is still real). Price history lives on the bill row, so it goes with it and needs no separate table.
+
+Reminder notifications use the fixed identifier `bill-reminder:<bill id>` instead of a stored notification id (see `utils/billReminders.ts`).
 
 ### 4.2 Occurrences are computed, not stored
 

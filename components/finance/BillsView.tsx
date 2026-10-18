@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
 import { fromYMD } from '../../utils/dates';
 import {
@@ -7,17 +7,20 @@ import {
   isActive,
   isSettled,
   monthlyEquivalent,
-  nextDueOnOrAfter,
+  nextUnpaidDue,
   Occurrence,
   occurrenceAmount,
   occurrencesInRange,
   overdueStart,
   Period,
+  recentPriceChange,
   RecurringPayment,
   shiftPeriod,
   Transaction,
 } from '../../utils/finance';
 import { formatMoney } from '../../utils/money';
+import BillsCalendar from './BillsCalendar';
+import { OccurrenceRow, shortDate } from './OccurrenceRow';
 import { addDays } from '../../utils/recurrence';
 
 type Props = {
@@ -31,76 +34,14 @@ type Props = {
   onTogglePaid: (occ: Occurrence) => void;
 };
 
-export function shortDate(ymd: string) {
-  return fromYMD(ymd).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
-}
-
 const frequencyLabel = (f: RecurringPayment['frequency']) => FREQUENCY_OPTIONS.find((o) => o.value === f)?.label ?? f;
-
-/** One bill occurrence with a tick to mark it paid. Shared with the Overview. */
-export function OccurrenceRow({
-  o,
-  today,
-  onEdit,
-  onTogglePaid,
-}: {
-  o: Occurrence;
-  today: string;
-  onEdit: (bill: RecurringPayment) => void;
-  onTogglePaid: (occ: Occurrence) => void;
-}) {
-  const settled = isSettled(o);
-  const overdue = !settled && o.due < today;
-  const meta = [overdue ? 'Overdue' : null, shortDate(o.due), o.payment.category, o.assumed ? 'Before you added it' : null]
-    .filter(Boolean)
-    .join(' · ');
-  return (
-    <TouchableOpacity
-      activeOpacity={0.7}
-      onPress={() => onEdit(o.payment)}
-      className="flex-row items-center bg-white dark:bg-stone-800 rounded-[10px] mb-2 overflow-hidden"
-      style={{ borderLeftWidth: 4, borderLeftColor: overdue ? '#e11d48' : categoryColor(o.payment.category) }}
-    >
-      <TouchableOpacity
-        className="pl-3 pr-2.5 py-3"
-        onPress={() => onTogglePaid(o)}
-        // Assumed-paid dates have no record to remove, so they can't be unticked.
-        disabled={o.assumed}
-        hitSlop={6}
-        accessibilityRole="checkbox"
-        accessibilityState={{ checked: settled, disabled: o.assumed }}
-        accessibilityLabel={`Mark ${o.payment.name} as paid`}
-      >
-        <View
-          className="w-[22px] h-[22px] rounded-full border-2 border-teal-600 items-center justify-center"
-          style={o.assumed ? { opacity: 0.4 } : undefined}
-        >
-          {settled && <View className="w-[12px] h-[12px] rounded-full bg-teal-600" />}
-        </View>
-      </TouchableOpacity>
-      <View className="flex-1 py-2.5 pr-2">
-        <Text
-          numberOfLines={1}
-          className={`text-[15px] font-medium ${settled ? 'line-through text-stone-400 dark:text-stone-500' : 'text-stone-800 dark:text-stone-100'}`}
-        >
-          {o.payment.name}
-        </Text>
-        <Text className={`text-xs ${overdue ? 'text-rose-600' : 'text-stone-500 dark:text-stone-400'}`}>{meta}</Text>
-      </View>
-      <Text
-        className={`pr-3 text-[15px] font-semibold ${settled ? 'text-stone-400 dark:text-stone-500' : 'text-stone-800 dark:text-stone-100'}`}
-      >
-        {formatMoney(occurrenceAmount(o))}
-      </Text>
-    </TouchableOpacity>
-  );
-}
 
 /** Upcoming bills grouped by when they're due, plus the lists of all bills and income. */
 export default function BillsView({ payments, transactions, today, period, periodStartDay, onEdit, onTogglePaid }: Props) {
   const nextPeriod = shiftPeriod(period, 1, periodStartDay);
   const weekEnd = addDays(today, 6);
-  const calendar = periodStartDay === 1;
+  const calendarMonths = periodStartDay === 1;
+  const [mode, setMode] = useState<'list' | 'calendar'>('list');
 
   const out = payments.filter((p) => p.direction === 'out');
   const income = payments.filter((p) => p.direction === 'in');
@@ -118,7 +59,7 @@ export default function BillsView({ payments, transactions, today, period, perio
   const paidTotal = inPeriod.filter(isSettled).reduce((s, o) => s + occurrenceAmount(o), 0);
   const dueTotal = inPeriod.filter((o) => !isSettled(o)).reduce((s, o) => s + occurrenceAmount(o), 0);
   const monthName = fromYMD(today).toLocaleDateString(undefined, { month: 'long' });
-  const thisLabel = calendar ? monthName : 'this pay period';
+  const thisLabel = calendarMonths ? monthName : 'this pay period';
 
   function section(title: string, items: Occurrence[], danger = false) {
     if (items.length === 0) return null;
@@ -143,8 +84,9 @@ export default function BillsView({ payments, transactions, today, period, perio
   }
 
   function paymentRow(p: RecurringPayment) {
-    const next = isActive(p, today) ? nextDueOnOrAfter(p, today) : null;
+    const next = isActive(p, today) ? nextUnpaidDue(p, transactions, today) : null;
     const status = p.paused ? 'Paused' : next ? `Next ${shortDate(next)}` : 'Ended';
+    const change = recentPriceChange(p, today);
     return (
       <TouchableOpacity
         key={p.id}
@@ -160,7 +102,14 @@ export default function BillsView({ payments, transactions, today, period, perio
           </Text>
           <Text className="text-xs text-stone-500 dark:text-stone-400">
             {frequencyLabel(p.frequency)} · {status}
+            {p.direction === 'out' && p.remind_days_before != null ? ' · 🔔' : ''}
           </Text>
+          {change && (
+            <Text className="text-[11px] font-semibold" style={{ color: change.to_minor > change.from_minor ? '#e11d48' : '#16a34a' }}>
+              {change.to_minor > change.from_minor ? '▲ Up' : '▼ Down'} {formatMoney(Math.abs(change.to_minor - change.from_minor))}{' '}
+              from {formatMoney(change.from_minor)}
+            </Text>
+          )}
         </View>
         <View className="items-end">
           <Text
@@ -204,7 +153,7 @@ export default function BillsView({ payments, transactions, today, period, perio
           <View className="flex-row" style={{ gap: 8 }}>
             <View className="flex-1 rounded-lg px-3 py-2 bg-teal-50 dark:bg-teal-950">
               <Text className="text-[11px] text-teal-700 dark:text-teal-300">
-                Paid {calendar ? `in ${monthName}` : 'this period'}
+                Paid {calendarMonths ? `in ${monthName}` : 'this period'}
               </Text>
               <Text className="text-base font-bold text-teal-700 dark:text-teal-300">{formatMoney(paidTotal)}</Text>
             </View>
@@ -216,12 +165,46 @@ export default function BillsView({ payments, transactions, today, period, perio
         </View>
       )}
 
-      {/* ── Upcoming ── */}
-      {section('Overdue', overdue, true)}
-      {section('Due in the next 7 days', thisWeek)}
-      {section(`Later ${calendar ? `in ${monthName}` : thisLabel}`, laterThisPeriod)}
-      {section(calendar ? 'Next month' : 'Next pay period', nextOnes)}
-      {section(`Paid earlier ${calendar ? `in ${monthName}` : thisLabel}`, paidEarlier)}
+      {/* ── List / Calendar ── */}
+      {out.length > 0 && (
+        <View className="flex-row self-end mb-3 bg-stone-200 dark:bg-stone-700 rounded-lg p-0.5">
+          {([
+            ['list', 'List'],
+            ['calendar', 'Calendar'],
+          ] as const).map(([key, label]) => (
+            <TouchableOpacity
+              key={key}
+              className={`px-3 py-1 rounded-md ${mode === key ? 'bg-white dark:bg-stone-800' : ''}`}
+              onPress={() => setMode(key)}
+            >
+              <Text
+                className={`text-xs font-semibold ${mode === key ? 'text-teal-700' : 'text-stone-500 dark:text-stone-400'}`}
+              >
+                {label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      {mode === 'calendar' ? (
+        <BillsCalendar
+          bills={out}
+          transactions={transactions}
+          today={today}
+          onEdit={onEdit}
+          onTogglePaid={onTogglePaid}
+        />
+      ) : (
+        <>
+          {/* ── Upcoming ── */}
+          {section('Overdue', overdue, true)}
+          {section('Due in the next 7 days', thisWeek)}
+          {section(`Later ${calendarMonths ? `in ${monthName}` : thisLabel}`, laterThisPeriod)}
+          {section(calendarMonths ? 'Next month' : 'Next pay period', nextOnes)}
+          {section(`Paid earlier ${calendarMonths ? `in ${monthName}` : thisLabel}`, paidEarlier)}
+        </>
+      )}
 
       {/* ── All bills / income ── */}
       {out.length > 0 && (
