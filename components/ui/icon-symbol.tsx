@@ -22,6 +22,7 @@ const MAPPING = {
   'calendar': 'calendar-today',
   'cart.fill': 'shopping-cart',
   'dumbbell.fill': 'fitness-center',
+  'sterlingsign.circle.fill': 'currency-pound',
 } as IconMapping;
 
 /**
