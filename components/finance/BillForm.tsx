@@ -19,6 +19,7 @@ import {
   CATEGORIES,
   Frequency,
   FREQUENCY_OPTIONS,
+  INCOME_CATEGORIES,
   nextDueOnOrAfter,
   nthOccurrence,
   RecurringInput,
@@ -29,8 +30,10 @@ import { useTheme } from '../../utils/theme';
 
 type Props = {
   visible: boolean;
-  /** Bill being edited, or null to add a new one. */
+  /** Payment being edited, or null to add a new one. */
   bill: RecurringPayment | null;
+  /** Whether a new payment starts as a bill or as income. */
+  defaultDirection?: 'out' | 'in';
   onSubmit: (input: RecurringInput) => void;
   onDelete?: () => void;
   onClose: () => void;
@@ -48,9 +51,10 @@ function formatDate(ymd: string) {
 }
 
 /** Add/edit sheet for a repeating payment. */
-export default function BillForm({ visible, bill, onSubmit, onDelete, onClose }: Props) {
+export default function BillForm({ visible, bill, defaultDirection = 'out', onSubmit, onDelete, onClose }: Props) {
   const theme = useTheme();
 
+  const [direction, setDirection] = useState<'out' | 'in'>('out');
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [frequency, setFrequency] = useState<Frequency>('monthly');
@@ -72,6 +76,7 @@ export default function BillForm({ visible, bill, onSubmit, onDelete, onClose }:
     if (!visible) return;
     const today = todayYMD();
     const shown = bill ? nextDueOnOrAfter(bill, today) ?? bill.anchor_date : today;
+    setDirection(bill?.direction ?? defaultDirection);
     setName(bill?.name ?? '');
     setAmount(bill ? minorToInput(bill.amount_minor) : '');
     setFrequency(bill?.frequency ?? 'monthly');
@@ -80,11 +85,11 @@ export default function BillForm({ visible, bill, onSubmit, onDelete, onClose }:
     setEndMode(bill?.end_date ? 'date' : 'never');
     setEndDate(bill?.end_date ?? shown);
     setCount('');
-    setCategory(bill?.category ?? CATEGORIES[0].name);
+    setCategory(bill?.category ?? (defaultDirection === 'in' ? INCOME_CATEGORIES : CATEGORIES)[0].name);
     setPaused(bill?.paused ?? false);
     setNotes(bill?.notes ?? '');
     setPicker(null);
-  }, [visible, bill]);
+  }, [visible, bill, defaultDirection]);
 
   // Notes sits at the bottom of the sheet, so once the keyboard has finished
   // opening, scroll it back into view above the keyboard.
@@ -97,7 +102,7 @@ export default function BillForm({ visible, bill, onSubmit, onDelete, onClose }:
 
   function submit() {
     if (!name.trim()) {
-      Alert.alert('Missing name', 'What is this payment for?');
+      Alert.alert('Missing name', isIncome ? 'Where is this money from?' : 'What is this payment for?');
       return;
     }
     const amountMinor = parseMoney(amount);
@@ -127,7 +132,7 @@ export default function BillForm({ visible, bill, onSubmit, onDelete, onClose }:
     onSubmit({
       name: name.trim(),
       amount_minor: amountMinor,
-      direction: 'out',
+      direction,
       frequency,
       anchor_date: anchor,
       end_date: end,
@@ -138,10 +143,20 @@ export default function BillForm({ visible, bill, onSubmit, onDelete, onClose }:
   }
 
   function confirmDelete() {
-    Alert.alert('Delete bill', 'Payments you have already ticked off are kept in your history.', [
+    Alert.alert(isIncome ? 'Delete income' : 'Delete bill', 'Payments you have already ticked off are kept in your history.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: onDelete },
     ]);
+  }
+
+  const isIncome = direction === 'in';
+  const categories = isIncome ? INCOME_CATEGORIES : CATEGORIES;
+  const noun = isIncome ? 'Income' : 'Bill';
+
+  function changeDirection(next: 'out' | 'in') {
+    setDirection(next);
+    const list = next === 'in' ? INCOME_CATEGORIES : CATEGORIES;
+    if (!list.some((c) => c.name === category)) setCategory(list[0].name);
   }
 
   const inputClass =
@@ -178,17 +193,34 @@ export default function BillForm({ visible, bill, onSubmit, onDelete, onClose }:
               {/* Header */}
               <View className="flex-row items-center justify-between mb-4">
                 <Text className="text-xl font-bold text-stone-800 dark:text-stone-100">
-                  {bill ? 'Edit Bill' : 'New Bill'}
+                  {bill ? `Edit ${noun}` : `New ${noun}`}
                 </Text>
                 <TouchableOpacity onPress={onClose} hitSlop={10}>
                   <Text className="text-sm font-semibold text-stone-500 dark:text-stone-400">Cancel</Text>
                 </TouchableOpacity>
               </View>
 
+              {/* Money out / in */}
+              <View className="flex-row mb-3" style={{ gap: 6 }}>
+                {([
+                  ['out', 'Bill (money out)'],
+                  ['in', 'Income (money in)'],
+                ] as const).map(([value, label]) => (
+                  <View key={value} className="flex-1">
+                    <Chip
+                      label={label}
+                      selected={direction === value}
+                      color={value === 'in' ? '#16a34a' : '#0d9488'}
+                      onPress={() => changeDirection(value)}
+                    />
+                  </View>
+                ))}
+              </View>
+
               {/* Name + amount */}
               <TextInput
                 className={`${inputClass} mb-3`}
-                placeholder="e.g. Rent, Netflix, Council tax"
+                placeholder={isIncome ? 'e.g. Salary, Child benefit' : 'e.g. Rent, Netflix, Council tax'}
                 placeholderTextColor={theme.placeholder}
                 value={name}
                 onChangeText={setName}
@@ -288,7 +320,7 @@ export default function BillForm({ visible, bill, onSubmit, onDelete, onClose }:
               {/* Category */}
               <Text className={labelClass}>Category</Text>
               <View className="flex-row flex-wrap mb-3" style={{ gap: 6 }}>
-                {CATEGORIES.map((c) => (
+                {categories.map((c) => (
                   <Chip
                     key={c.name}
                     label={c.name}
@@ -308,7 +340,7 @@ export default function BillForm({ visible, bill, onSubmit, onDelete, onClose }:
                   <View className="flex-1 pr-3">
                     <Text className="text-sm font-semibold" style={{ color: theme.text }}>Paused</Text>
                     <Text className="text-[11px]" style={{ color: theme.placeholder }}>
-                      Hidden from upcoming bills and totals until you unpause it
+                      Left out of upcoming payments and totals until you unpause it
                     </Text>
                   </View>
                   <Switch
@@ -342,12 +374,12 @@ export default function BillForm({ visible, bill, onSubmit, onDelete, onClose }:
               />
 
               <TouchableOpacity className="bg-teal-600 rounded-lg py-3 items-center" onPress={submit}>
-                <Text className="text-white text-[15px] font-bold">{bill ? 'Save Changes' : 'Add Bill'}</Text>
+                <Text className="text-white text-[15px] font-bold">{bill ? 'Save Changes' : `Add ${noun}`}</Text>
               </TouchableOpacity>
 
               {bill && onDelete ? (
                 <TouchableOpacity className="mt-3 py-2.5 items-center" onPress={confirmDelete}>
-                  <Text className="text-rose-600 text-sm font-semibold">Delete Bill</Text>
+                  <Text className="text-rose-600 text-sm font-semibold">Delete {noun}</Text>
                 </TouchableOpacity>
               ) : null}
             </ScrollView>

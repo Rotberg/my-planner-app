@@ -23,6 +23,7 @@ const MAPPING = {
   'cart.fill': 'shopping-cart',
   'dumbbell.fill': 'fitness-center',
   'sterlingsign.circle.fill': 'currency-pound',
+  'gearshape.fill': 'settings',
 } as IconMapping;
 
 /**
